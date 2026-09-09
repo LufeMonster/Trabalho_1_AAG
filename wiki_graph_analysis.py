@@ -56,6 +56,8 @@ from collections import Counter
 import networkx as nx
 import pandas as pd
 
+import centrality_metrics
+
 
 # --------------------------------------------------------------------------
 # Utilidades
@@ -351,83 +353,6 @@ def get_diameter(G):
     d = nx.diameter(componente)
     return {"diametro": d, "n_nos_maior_componente": n, "exato": True}
 
-
-# --------------------------------------------------------------------------
-# 3. Métricas de centralidade (nós mais importantes)
-# --------------------------------------------------------------------------
-
-@timeit
-def compute_degree_centrality(G):
-    """Degree centrality (in, out e total) para cada nó."""
-    return {
-        "in": nx.in_degree_centrality(G),
-        "out": nx.out_degree_centrality(G),
-        "total": {
-            n: (G.in_degree(n) + G.out_degree(n)) / (G.number_of_nodes() - 1)
-            for n in G.nodes()
-        } if G.number_of_nodes() > 1 else {n: 0 for n in G.nodes()},
-    }
-
-
-@timeit
-def compute_closeness_centrality(G):
-    """
-    Closeness centrality. Usa a implementação do NetworkX, que já lida
-    corretamente com grafos desconexos (normaliza pelo tamanho do
-    componente alcançável). Para grafos direcionados, closeness é
-    calculada com base no caminho de entrada (in-distances) por padrão
-    aqui usamos G.reverse() para medir "o quão perto os outros nós
-    conseguem chegar até este nó" (interpretação mais comum em redes de
-    citação/links).
-    """
-    return nx.closeness_centrality(G.reverse())
-
-
-@timeit
-def compute_betweenness_centrality(G, amostra_k=None, seed=42):
-    """
-    Betweenness centrality.
-
-    Custo exato: O(n*m) — proibitivo para grafos grandes. Se `amostra_k`
-    for informado, usa o parâmetro `k` do NetworkX para aproximar via
-    amostragem de nós-fonte (algoritmo de Brandes com amostragem).
-    """
-    if amostra_k:
-        return nx.betweenness_centrality(G, k=amostra_k, seed=seed, normalized=True)
-    return nx.betweenness_centrality(G, normalized=True)
-
-
-@timeit
-def compute_eigenvector_centrality(G, max_iter=1000, tol=1e-06):
-    """
-    Eigenvector centrality. Pode não convergir em alguns grafos
-    direcionados com estrutura patológica (ex: muitos nós sem
-    in-edges); nesses casos, caímos de volta para a versão via numpy
-    (mais robusta) e, em último caso, retornamos None com aviso.
-    """
-    try:
-        return nx.eigenvector_centrality(G, max_iter=max_iter, tol=tol)
-    except nx.PowerIterationFailedConvergence:
-        log("  Aviso: eigenvector_centrality (power iteration) não convergiu; "
-            "tentando eigenvector_centrality_numpy...")
-        try:
-            return nx.eigenvector_centrality_numpy(G)
-        except Exception as e:
-            log(f"  Aviso: eigenvector_centrality_numpy também falhou ({e}). "
-                "Retornando None.")
-            return None
-
-
-@timeit
-def compute_pagerank(G, alpha=0.85):
-    """
-    PageRank — métrica natural e especialmente adequada para grafos de
-    links da Wikipedia, já que foi originalmente desenhada para esse tipo
-    de rede (links de páginas web).
-    """
-    return nx.pagerank(G, alpha=alpha)
-
-
 # --------------------------------------------------------------------------
 # 4. Relatórios / apresentação dos resultados
 # --------------------------------------------------------------------------
@@ -554,14 +479,14 @@ def imprimir_diametro(G):
 
 
 def imprimir_degree_centrality(G, top_k_n):
-    dc = compute_degree_centrality(G)
+    dc = centrality_metrics.compute_degree_centrality(G)
     imprimir_top_k("degree centrality (total)", top_k(dc["total"], G, top_k_n), top_k_n)
     return dc
 
 
 def imprimir_closeness_centrality(G, top_k_n):
     log("Calculando closeness centrality (pode demorar em grafos grandes)...")
-    clo = compute_closeness_centrality(G)
+    clo = centrality_metrics.compute_closeness_centrality(G)
     imprimir_top_k("closeness centrality", top_k(clo, G, top_k_n), top_k_n)
     return clo
 
@@ -569,7 +494,7 @@ def imprimir_closeness_centrality(G, top_k_n):
 def imprimir_betweenness_centrality(G, exato, sample_nodes, top_k_n):
     amostra_bet = None if exato else sample_nodes
     log("Calculando betweenness centrality (pode demorar bastante)...")
-    bet = compute_betweenness_centrality(G, amostra_k=amostra_bet)
+    bet = centrality_metrics.compute_betweenness_centrality(G, amostra_k=amostra_bet)
     imprimir_top_k(
         f"betweenness centrality {'(aproximado, k=' + str(amostra_bet) + ')' if amostra_bet else '(exato)'}",
         top_k(bet, G, top_k_n), top_k_n,
@@ -579,7 +504,7 @@ def imprimir_betweenness_centrality(G, exato, sample_nodes, top_k_n):
 
 def imprimir_eigenvector_centrality(G, top_k_n):
     log("Calculando eigenvector centrality...")
-    eig = compute_eigenvector_centrality(G)
+    eig = centrality_metrics.compute_eigenvector_centrality(G)
     if eig is not None:
         imprimir_top_k("eigenvector centrality", top_k(eig, G, top_k_n), top_k_n)
     else:
@@ -589,7 +514,7 @@ def imprimir_eigenvector_centrality(G, top_k_n):
 
 def imprimir_pagerank(G, top_k_n):
     log("Calculando PageRank...")
-    pr = compute_pagerank(G)
+    pr = centrality_metrics.compute_pagerank(G)
     imprimir_top_k("PageRank", top_k(pr, G, top_k_n), top_k_n)
     return pr
 
