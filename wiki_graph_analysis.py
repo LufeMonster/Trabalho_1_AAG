@@ -1,0 +1,936 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Análise de grafo de links da Wikipedia (2006)
+================================================
+
+Lê um arquivo CSV com colunas:
+    page_id_from, page_title_from, page_id_to, page_title_to
+
+e calcula um conjunto de métricas clássicas de análise de redes/grafos:
+
+Estrutura básica:
+    - número de nós e arestas
+    - grau médio
+    - distribuição de graus
+    - densidade
+    - clustering coefficient (coeficiente de agrupamento)
+    - average path length (comprimento médio do caminho)
+    - diâmetro
+    - componentes conexos
+
+Centralidade (nós mais importantes):
+    - degree centrality
+    - closeness centrality
+    - betweenness centrality
+    - eigenvector centrality
+    - PageRank
+
+O grafo de links da Wikipedia é DIRECIONADO (um link de A para B não implica
+o inverso). O script constrói tanto a versão direcionada (para PageRank,
+componentes fortemente/fracamente conexos, etc.) quanto, quando necessário,
+trabalha com a versão não-direcionada (usada tradicionalmente para
+clustering coefficient, diâmetro "clássico" etc.).
+
+Como esse tipo de grafo real pode ter centenas de milhares/milhões de nós e
+arestas, algumas métricas (average path length, diâmetro, betweenness)
+possuem complexidade proibitiva para cálculo exato. Por isso o script:
+    - calcula essas métricas de forma EXATA quando o grafo é pequeno o
+      suficiente;
+    - usa AMOSTRAGEM (aproximação) automaticamente quando o grafo é grande,
+      deixando isso claro no output.
+
+Uso:
+    python wiki_graph_analysis.py caminho/para/arquivo.csv
+    python wiki_graph_analysis.py caminho/para/arquivo.csv --sample-nodes 500
+    python wiki_graph_analysis.py caminho/para/arquivo.csv --exact
+    python wiki_graph_analysis.py caminho/para/arquivo.csv --top-k 15 --plot
+"""
+
+import argparse
+import random
+import sys
+import time
+from collections import Counter
+
+import networkx as nx
+import pandas as pd
+
+
+# --------------------------------------------------------------------------
+# Utilidades
+# --------------------------------------------------------------------------
+
+def log(msg):
+    """Imprime mensagens de progresso com timestamp relativo simples."""
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
+
+
+def timeit(func):
+    """Decorator simples para medir e reportar o tempo de cada etapa."""
+    def wrapper(*args, **kwargs):
+        t0 = time.time()
+        result = func(*args, **kwargs)
+        dt = time.time() - t0
+        log(f"  -> '{func.__name__}' concluída em {dt:.2f}s")
+        return result
+    return wrapper
+
+
+# --------------------------------------------------------------------------
+# 1. Leitura dos dados e construção do grafo
+# --------------------------------------------------------------------------
+
+def _detectar_separador(caminho_csv):
+    """
+    Tenta detectar automaticamente o separador de campos do arquivo.
+
+    Datasets de grafo de links da Wikipedia (ex: o dataset "wikilinkgraphs"
+    de Consonni et al.) costumam vir com extensão .csv mas separados por
+    TAB, não por vírgula. Ler um arquivo TAB-separado como se fosse
+    vírgula-separado faz o pandas enxergar "1 coluna" na maior parte das
+    linhas e quebrar (ParserError) assim que algum título de página contiver
+    uma vírgula.
+
+    Estratégia: olhamos a primeira linha não vazia e contamos ocorrências
+    de cada separador candidato; escolhemos o que aparece mais vezes.
+    """
+    candidatos = ["\t", ",", ";", "|"]
+
+    with open(caminho_csv, "r", encoding="utf-8", errors="replace") as f:
+        primeira_linha = f.readline()
+
+    contagens = {sep: primeira_linha.count(sep) for sep in candidatos}
+    melhor_sep = max(contagens, key=contagens.get)
+
+    if contagens[melhor_sep] == 0:
+        # nenhum separador candidato encontrado; assume vírgula como último recurso
+        return ","
+
+    return melhor_sep
+
+
+@timeit
+def carregar_dados(caminho_csv, nrows=None, sep=None):
+    """
+    Lê o CSV/TSV de arestas da Wikipedia.
+
+    Espera colunas: page_id_from, page_title_from, page_id_to, page_title_to
+    (aceita variações comuns de nome de coluna, ver `rename_map` abaixo).
+
+    O parâmetro `sep` permite forçar o separador manualmente (ex: '\\t').
+    Se `sep=None` (padrão), o separador é detectado automaticamente —
+    importante porque vários datasets desse tipo (ex: o dataset
+    "wikilinkgraphs") usam TAB como separador apesar da extensão .csv.
+    """
+    if sep is None:
+        sep = _detectar_separador(caminho_csv)
+        rotulo_sep = {"\t": "TAB", ",": "vírgula", ";": "ponto-e-vírgula", "|": "pipe"}.get(sep, repr(sep))
+        log(f"Separador detectado automaticamente: {rotulo_sep}")
+
+    log(f"Lendo arquivo CSV: {caminho_csv}")
+    try:
+        df = pd.read_csv(caminho_csv, nrows=nrows, sep=sep, engine="c")
+    except pd.errors.ParserError:
+        # fallback: parser mais tolerante (mais lento, porém mais robusto
+        # a linhas malformadas / separadores inconsistentes)
+        log("  Aviso: falha ao ler com o parser rápido; tentando novamente "
+            "com engine='python' (mais lento, porém mais tolerante)...")
+        df = pd.read_csv(caminho_csv, nrows=nrows, sep=sep, engine="python",
+                          on_bad_lines="warn")
+
+    # normaliza nomes de coluna (tolera maiúsculas/minúsculas e pequenas variações)
+    rename_map = {}
+    cols_lower = {c.lower().strip(): c for c in df.columns}
+
+    aliases = {
+        "page_id_from": ["page_id_from", "id_from", "source_id", "from_id"],
+        "page_title_from": ["page_title_from", "title_from", "source", "from_title"],
+        "page_id_to": ["page_id_to", "id_to", "target_id", "to_id"],
+        "page_title_to": ["page_title_to", "title_to", "target", "to_title"],
+    }
+
+    for padrao, opcoes in aliases.items():
+        for op in opcoes:
+            if op in cols_lower:
+                rename_map[cols_lower[op]] = padrao
+                break
+
+    df = df.rename(columns=rename_map)
+
+    colunas_esperadas = ["page_id_from", "page_title_from", "page_id_to", "page_title_to"]
+    faltando = [c for c in colunas_esperadas if c not in df.columns]
+    if faltando:
+        raise ValueError(
+            f"Colunas ausentes no CSV: {faltando}. "
+            f"Colunas encontradas: {list(df.columns)}"
+        )
+
+    df = df.dropna(subset=["page_id_from", "page_id_to"])
+    log(f"  {len(df):,} linhas (arestas brutas) carregadas.")
+    return df
+
+
+@timeit
+def construir_grafo(df, usar_titulos_como_rotulo=True):
+    """
+    Constrói um grafo direcionado (DiGraph) do NetworkX a partir do
+    DataFrame de arestas.
+
+    Usa page_id como identificador do nó (mais confiável que o título,
+    que pode ter duplicatas/ambiguidades) e guarda o título como atributo
+    'title' do nó, se disponível.
+    """
+    G = nx.DiGraph()
+
+    # adiciona nós com atributo de título
+    nos_from = df[["page_id_from", "page_title_from"]].rename(
+        columns={"page_id_from": "id", "page_title_from": "title"}
+    )
+    nos_to = df[["page_id_to", "page_title_to"]].rename(
+        columns={"page_id_to": "id", "page_title_to": "title"}
+    )
+    nos = pd.concat([nos_from, nos_to]).drop_duplicates(subset="id")
+
+    for _, row in nos.iterrows():
+        G.add_node(row["id"], title=row["title"] if usar_titulos_como_rotulo else row["id"])
+
+    # adiciona arestas (remove self-loops duplicados automaticamente via set)
+    arestas = list(zip(df["page_id_from"], df["page_id_to"]))
+    G.add_edges_from(arestas)
+
+    log(f"  Grafo construído: {G.number_of_nodes():,} nós, {G.number_of_edges():,} arestas.")
+    return G
+
+
+def rotulo(G, node_id):
+    """Retorna um rótulo legível (título) para um id de nó, se existir."""
+    return G.nodes[node_id].get("title", str(node_id))
+
+
+# --------------------------------------------------------------------------
+# 2. Métricas estruturais básicas
+# --------------------------------------------------------------------------
+
+@timeit
+def num_nos_e_arestas(G):
+    """Retorna (número de nós, número de arestas)."""
+    return G.number_of_nodes(), G.number_of_edges()
+
+
+@timeit
+def grau_medio(G):
+    """
+    Grau médio do grafo.
+    Para grafos direcionados, retorna in-degree médio e out-degree médio
+    (que são sempre iguais em valor total, pois cada aresta contribui +1
+    para um out-degree e +1 para um in-degree), além do grau total médio
+    (in + out) por nó.
+    """
+    n = G.number_of_nodes()
+    if n == 0:
+        return {"in_medio": 0, "out_medio": 0, "total_medio": 0}
+
+    soma_in = sum(d for _, d in G.in_degree())
+    soma_out = sum(d for _, d in G.out_degree())
+
+    return {
+        "in_medio": soma_in / n,
+        "out_medio": soma_out / n,
+        "total_medio": (soma_in + soma_out) / n,
+    }
+
+
+@timeit
+def distribuicao_de_graus(G, tipo="total"):
+    """
+    Retorna a distribuição de graus como um Counter {grau: quantidade_de_nós}.
+
+    tipo: 'in', 'out' ou 'total' (in+out), aplicável a grafos direcionados.
+    """
+    if tipo == "in":
+        graus = [d for _, d in G.in_degree()]
+    elif tipo == "out":
+        graus = [d for _, d in G.out_degree()]
+    else:
+        graus = [G.in_degree(n) + G.out_degree(n) for n in G.nodes()]
+
+    return Counter(graus)
+
+
+@timeit
+def densidade(G):
+    """Densidade do grafo (proporção de arestas existentes sobre o máximo possível)."""
+    return nx.density(G)
+
+
+@timeit
+def clustering_coefficient(G, amostra=None, seed=42):
+    """
+    Coeficiente de clustering médio (transitividade local média).
+    NetworkX calcula clustering em grafos não-direcionados (ou trata o
+    direcionado com sua própria definição); aqui convertemos para
+    não-direcionado, que é a abordagem clássica (Watts-Strogatz).
+
+    Se `amostra` for informado (int), calcula em uma amostra de nós para
+    grafos muito grandes (mais rápido, mas aproximado).
+    """
+    Gu = G.to_undirected()
+
+    if amostra and Gu.number_of_nodes() > amostra:
+        random.seed(seed)
+        nos_amostrados = random.sample(list(Gu.nodes()), amostra)
+        coefs = nx.clustering(Gu, nodes=nos_amostrados)
+        media = sum(coefs.values()) / len(coefs)
+        return {"media_aproximada": media, "n_amostrados": amostra, "exato": False}
+    else:
+        media = nx.average_clustering(Gu)
+        return {"media": media, "exato": True}
+
+
+@timeit
+def componentes_conexos(G):
+    """
+    Para grafo direcionado, calcula:
+      - número e tamanho dos componentes FRACAMENTE conexos (weakly connected)
+      - número e tamanho dos componentes FORTEMENTE conexos (strongly connected)
+    """
+    fracos = sorted(
+        (len(c) for c in nx.weakly_connected_components(G)), reverse=True
+    )
+    fortes = sorted(
+        (len(c) for c in nx.strongly_connected_components(G)), reverse=True
+    )
+
+    return {
+        "n_componentes_fracos": len(fracos),
+        "maior_componente_fraco": fracos[0] if fracos else 0,
+        "tamanhos_fracos_top5": fracos[:5],
+        "n_componentes_fortes": len(fortes),
+        "maior_componente_forte": fortes[0] if fortes else 0,
+        "tamanhos_fortes_top5": fortes[:5],
+    }
+
+
+def _maior_componente_fraco_como_subgrafo(G):
+    """
+    Retorna o subgrafo correspondente ao maior componente conexo.
+    Aceita tanto grafo direcionado (usa componentes fracamente conexos)
+    quanto já não-direcionado (usa componentes conexos "normais").
+    """
+    if G.is_directed():
+        maior = max(nx.weakly_connected_components(G), key=len)
+    else:
+        maior = max(nx.connected_components(G), key=len)
+    return G.subgraph(maior).copy()
+
+
+@timeit
+def average_path_length(G, amostra_nos=None, seed=42):
+    """
+    Comprimento médio do caminho mais curto.
+
+    Exige que o grafo seja (fortemente, se direcionado) conexo para o
+    cálculo exato do NetworkX. Como grafos reais raramente são totalmente
+    conexos, aplicamos o cálculo sobre o maior componente conexo.
+
+    Se `amostra_nos` for informado, estima a métrica via amostragem de
+    pares de nós (Monte Carlo) — necessário para grafos grandes, pois o
+    cálculo exato é O(n*m).
+    """
+    Gu = G.to_undirected()
+    componente = _maior_componente_fraco_como_subgrafo(Gu)
+
+    if amostra_nos and componente.number_of_nodes() > amostra_nos:
+        random.seed(seed)
+        nos = list(componente.nodes())
+        amostrados = random.sample(nos, amostra_nos)
+        distancias = []
+        for u in amostrados:
+            comprimentos = nx.single_source_shortest_path_length(componente, u)
+            distancias.extend(comprimentos.values())
+        # remove distância 0 (do nó para ele mesmo)
+        distancias = [d for d in distancias if d > 0]
+        media = sum(distancias) / len(distancias) if distancias else float("nan")
+        return {
+            "media_aproximada": media,
+            "n_amostrados": amostra_nos,
+            "n_nos_maior_componente": componente.number_of_nodes(),
+            "exato": False,
+        }
+    else:
+        media = nx.average_shortest_path_length(componente)
+        return {
+            "media": media,
+            "n_nos_maior_componente": componente.number_of_nodes(),
+            "exato": True,
+        }
+
+
+@timeit
+def diametro(G, amostra_nos=None, seed=42):
+    """
+    Diâmetro do grafo (maior distância mínima entre dois nós), calculado
+    sobre o maior componente conexo (versão não-direcionada).
+
+    Para grafos grandes, calcular o diâmetro exato é caro (equivalente a
+    calcular BFS a partir de todos os nós). Usamos a técnica de "dupla
+    varredura" (double sweep) como aproximação rápida e, opcionalmente,
+    amostragem de múltiplas fontes para refinar a estimativa (limite
+    inferior do diâmetro real).
+    """
+    Gu = G.to_undirected()
+    componente = _maior_componente_fraco_como_subgrafo(Gu)
+    n = componente.number_of_nodes()
+
+    if amostra_nos and n > amostra_nos:
+        random.seed(seed)
+        candidatos = random.sample(list(componente.nodes()), amostra_nos)
+        maior_excentricidade = 0
+        for u in candidatos:
+            comprimentos = nx.single_source_shortest_path_length(componente, u)
+            maior_local = max(comprimentos.values())
+            maior_excentricidade = max(maior_excentricidade, maior_local)
+        return {
+            "diametro_aproximado_limite_inferior": maior_excentricidade,
+            "n_amostrados": amostra_nos,
+            "n_nos_maior_componente": n,
+            "exato": False,
+        }
+    else:
+        d = nx.diameter(componente)
+        return {"diametro": d, "n_nos_maior_componente": n, "exato": True}
+
+
+# --------------------------------------------------------------------------
+# 3. Métricas de centralidade (nós mais importantes)
+# --------------------------------------------------------------------------
+
+@timeit
+def degree_centrality(G):
+    """Degree centrality (in, out e total) para cada nó."""
+    return {
+        "in": nx.in_degree_centrality(G),
+        "out": nx.out_degree_centrality(G),
+        "total": {
+            n: (G.in_degree(n) + G.out_degree(n)) / (G.number_of_nodes() - 1)
+            for n in G.nodes()
+        } if G.number_of_nodes() > 1 else {n: 0 for n in G.nodes()},
+    }
+
+
+@timeit
+def closeness_centrality(G):
+    """
+    Closeness centrality. Usa a implementação do NetworkX, que já lida
+    corretamente com grafos desconexos (normaliza pelo tamanho do
+    componente alcançável). Para grafos direcionados, closeness é
+    calculada com base no caminho de entrada (in-distances) por padrão
+    aqui usamos G.reverse() para medir "o quão perto os outros nós
+    conseguem chegar até este nó" (interpretação mais comum em redes de
+    citação/links).
+    """
+    return nx.closeness_centrality(G.reverse())
+
+
+@timeit
+def betweenness_centrality(G, amostra_k=None, seed=42):
+    """
+    Betweenness centrality.
+
+    Custo exato: O(n*m) — proibitivo para grafos grandes. Se `amostra_k`
+    for informado, usa o parâmetro `k` do NetworkX para aproximar via
+    amostragem de nós-fonte (algoritmo de Brandes com amostragem).
+    """
+    if amostra_k:
+        return nx.betweenness_centrality(G, k=amostra_k, seed=seed, normalized=True)
+    return nx.betweenness_centrality(G, normalized=True)
+
+
+@timeit
+def eigenvector_centrality(G, max_iter=1000, tol=1e-06):
+    """
+    Eigenvector centrality. Pode não convergir em alguns grafos
+    direcionados com estrutura patológica (ex: muitos nós sem
+    in-edges); nesses casos, caímos de volta para a versão via numpy
+    (mais robusta) e, em último caso, retornamos None com aviso.
+    """
+    try:
+        return nx.eigenvector_centrality(G, max_iter=max_iter, tol=tol)
+    except nx.PowerIterationFailedConvergence:
+        log("  Aviso: eigenvector_centrality (power iteration) não convergiu; "
+            "tentando eigenvector_centrality_numpy...")
+        try:
+            return nx.eigenvector_centrality_numpy(G)
+        except Exception as e:
+            log(f"  Aviso: eigenvector_centrality_numpy também falhou ({e}). "
+                "Retornando None.")
+            return None
+
+
+@timeit
+def pagerank(G, alpha=0.85):
+    """
+    PageRank — métrica natural e especialmente adequada para grafos de
+    links da Wikipedia, já que foi originalmente desenhada para esse tipo
+    de rede (links de páginas web).
+    """
+    return nx.pagerank(G, alpha=alpha)
+
+
+# --------------------------------------------------------------------------
+# 4. Relatórios / apresentação dos resultados
+# --------------------------------------------------------------------------
+
+def top_k(dicionario, G, k=10):
+    """Retorna os k nós com maior valor em `dicionario`, já com rótulo (título)."""
+    ordenado = sorted(dicionario.items(), key=lambda x: x[1], reverse=True)[:k]
+    return [(rotulo(G, nid), nid, valor) for nid, valor in ordenado]
+
+
+def imprimir_top_k(nome_metrica, lista_top, k=10):
+    print(f"\nTop {min(k, len(lista_top))} nós por {nome_metrica}:")
+    for i, (titulo, nid, valor) in enumerate(lista_top, start=1):
+        print(f"  {i:2d}. {titulo!r} (id={nid})  ->  {valor:.6f}")
+
+
+def plotar_distribuicao_de_graus(dist_graus, titulo="Distribuição de graus", caminho_saida=None):
+    """Gera um gráfico log-log da distribuição de graus (típico de redes livres de escala)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    graus = sorted(dist_graus.keys())
+    quantidades = [dist_graus[g] for g in graus]
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.scatter(graus, quantidades, s=12, alpha=0.7)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Grau (k)")
+    ax.set_ylabel("Número de nós com grau k")
+    ax.set_title(titulo)
+    ax.grid(True, which="both", ls="--", alpha=0.3)
+    fig.tight_layout()
+
+    if caminho_saida:
+        fig.savefig(caminho_saida, dpi=150)
+        log(f"Gráfico salvo em: {caminho_saida}")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
+# 5. Funções de impressão por métrica (usadas tanto pelo relatório completo
+#    quanto pelo menu interativo, para evitar duplicação de código)
+# --------------------------------------------------------------------------
+
+def imprimir_num_nos_arestas(G):
+    n_nos, n_arestas = num_nos_e_arestas(G)
+    print(f"Número de nós:     {n_nos:,}")
+    print(f"Número de arestas: {n_arestas:,}")
+    return n_nos, n_arestas
+
+
+def imprimir_grau_medio(G):
+    gm = grau_medio(G)
+    print(f"Grau médio (in):    {gm['in_medio']:.4f}")
+    print(f"Grau médio (out):   {gm['out_medio']:.4f}")
+    print(f"Grau médio (total): {gm['total_medio']:.4f}")
+    return gm
+
+
+def imprimir_distribuicao_graus(G, plot=False, caminho_grafico="degree_distribution.png"):
+    dist = distribuicao_de_graus(G, tipo="total")
+    print(f"Distribuição de graus: {len(dist)} valores distintos de grau "
+          f"(grau máximo observado: {max(dist)})")
+    print("  (grau : nº de nós com esse grau) — 10 primeiros valores:")
+    for g in sorted(dist.keys())[:10]:
+        print(f"    {g:>4} : {dist[g]:,}")
+    if plot:
+        plotar_distribuicao_de_graus(
+            dist, titulo="Distribuição de graus - Wikipedia 2006",
+            caminho_saida=caminho_grafico,
+        )
+    return dist
+
+
+def imprimir_densidade(G):
+    dens = densidade(G)
+    print(f"Densidade: {dens:.8f}")
+    return dens
+
+
+def imprimir_clustering(G, exato, sample_nodes):
+    amostra_cc = None if exato else sample_nodes
+    cc = clustering_coefficient(G, amostra=amostra_cc)
+    if cc.get("exato"):
+        print(f"Clustering coefficient (médio, exato): {cc['media']:.6f}")
+    else:
+        print(f"Clustering coefficient (médio, aproximado, "
+              f"n={cc['n_amostrados']}): {cc['media_aproximada']:.6f}")
+    return cc
+
+
+def imprimir_componentes(G):
+    comp = componentes_conexos(G)
+    print(f"Componentes fracamente conexos: {comp['n_componentes_fracos']} "
+          f"(maior: {comp['maior_componente_fraco']:,} nós)")
+    print(f"  Top 5 tamanhos: {comp['tamanhos_fracos_top5']}")
+    print(f"Componentes fortemente conexos: {comp['n_componentes_fortes']} "
+          f"(maior: {comp['maior_componente_forte']:,} nós)")
+    print(f"  Top 5 tamanhos: {comp['tamanhos_fortes_top5']}")
+    return comp
+
+
+def imprimir_average_path_length(G, exato, sample_nodes):
+    amostra_apl = None if exato else sample_nodes
+    apl = average_path_length(G, amostra_nos=amostra_apl)
+    if apl.get("exato"):
+        print(f"Average path length (exato, maior componente, "
+              f"n={apl['n_nos_maior_componente']:,}): {apl['media']:.4f}")
+    else:
+        print(f"Average path length (aproximado, amostra={apl['n_amostrados']}, "
+              f"maior componente n={apl['n_nos_maior_componente']:,}): "
+              f"{apl['media_aproximada']:.4f}")
+    return apl
+
+
+def imprimir_diametro(G, exato, sample_nodes):
+    amostra_diam = None if exato else sample_nodes
+    diam = diametro(G, amostra_nos=amostra_diam)
+    if diam.get("exato"):
+        print(f"Diâmetro (exato, maior componente): {diam['diametro']}")
+    else:
+        print(f"Diâmetro (limite inferior aproximado, amostra="
+              f"{diam['n_amostrados']}): {diam['diametro_aproximado_limite_inferior']}")
+    return diam
+
+
+def imprimir_degree_centrality(G, top_k_n):
+    dc = degree_centrality(G)
+    imprimir_top_k("degree centrality (total)", top_k(dc["total"], G, top_k_n), top_k_n)
+    return dc
+
+
+def imprimir_closeness_centrality(G, top_k_n):
+    log("Calculando closeness centrality (pode demorar em grafos grandes)...")
+    clo = closeness_centrality(G)
+    imprimir_top_k("closeness centrality", top_k(clo, G, top_k_n), top_k_n)
+    return clo
+
+
+def imprimir_betweenness_centrality(G, exato, sample_nodes, top_k_n):
+    amostra_bet = None if exato else sample_nodes
+    log("Calculando betweenness centrality (pode demorar bastante)...")
+    bet = betweenness_centrality(G, amostra_k=amostra_bet)
+    imprimir_top_k(
+        f"betweenness centrality {'(aproximado, k=' + str(amostra_bet) + ')' if amostra_bet else '(exato)'}",
+        top_k(bet, G, top_k_n), top_k_n,
+    )
+    return bet
+
+
+def imprimir_eigenvector_centrality(G, top_k_n):
+    log("Calculando eigenvector centrality...")
+    eig = eigenvector_centrality(G)
+    if eig is not None:
+        imprimir_top_k("eigenvector centrality", top_k(eig, G, top_k_n), top_k_n)
+    else:
+        print("\nEigenvector centrality: não foi possível calcular (não convergiu).")
+    return eig
+
+
+def imprimir_pagerank(G, top_k_n):
+    log("Calculando PageRank...")
+    pr = pagerank(G)
+    imprimir_top_k("PageRank", top_k(pr, G, top_k_n), top_k_n)
+    return pr
+
+
+# --------------------------------------------------------------------------
+# 6. Orquestração — relatório completo (todas as métricas de uma vez)
+# --------------------------------------------------------------------------
+
+def gerar_relatorio_completo(G, exato=False, sample_nodes=500, top_k_n=10,
+                              plot=False, caminho_grafico="degree_distribution.png"):
+    """
+    Calcula e imprime TODAS as métricas, na ordem solicitada, para um grafo
+    G já carregado. Retorna um dicionário com todos os resultados.
+    """
+    print("\n" + "=" * 70)
+    print("MÉTRICAS ESTRUTURAIS BÁSICAS")
+    print("=" * 70)
+
+    n_nos, n_arestas = imprimir_num_nos_arestas(G)
+    gm = imprimir_grau_medio(G)
+    dist = imprimir_distribuicao_graus(G, plot=plot, caminho_grafico=caminho_grafico)
+    dens = imprimir_densidade(G)
+    cc = imprimir_clustering(G, exato, sample_nodes)
+    comp = imprimir_componentes(G)
+    apl = imprimir_average_path_length(G, exato, sample_nodes)
+    diam = imprimir_diametro(G, exato, sample_nodes)
+
+    print("\n" + "=" * 70)
+    print("CENTRALIDADE — NÓS MAIS IMPORTANTES")
+    print("=" * 70)
+
+    dc = imprimir_degree_centrality(G, top_k_n)
+    clo = imprimir_closeness_centrality(G, top_k_n)
+    bet = imprimir_betweenness_centrality(G, exato, sample_nodes, top_k_n)
+    eig = imprimir_eigenvector_centrality(G, top_k_n)
+    pr = imprimir_pagerank(G, top_k_n)
+
+    return {
+        "grafo": G,
+        "n_nos": n_nos,
+        "n_arestas": n_arestas,
+        "grau_medio": gm,
+        "distribuicao_graus": dist,
+        "densidade": dens,
+        "clustering": cc,
+        "componentes": comp,
+        "average_path_length": apl,
+        "diametro": diam,
+        "degree_centrality": dc,
+        "closeness_centrality": clo,
+        "betweenness_centrality": bet,
+        "eigenvector_centrality": eig,
+        "pagerank": pr,
+    }
+
+
+def analisar_grafo(caminho_csv, nrows=None, exato=False, sample_nodes=500,
+                    top_k_n=10, plot=False, caminho_grafico="degree_distribution.png",
+                    sep=None):
+    """
+    Lê o CSV, constrói o grafo e executa o pipeline completo de análise
+    (todas as métricas de uma vez), imprimindo um relatório no console.
+
+    Mantido para uso não-interativo / programático (ex: chamar a partir de
+    outro script ou notebook, ou via a flag --all no modo CLI).
+    """
+    df = carregar_dados(caminho_csv, nrows=nrows, sep=sep)
+    G = construir_grafo(df)
+    return gerar_relatorio_completo(
+        G, exato=exato, sample_nodes=sample_nodes, top_k_n=top_k_n,
+        plot=plot, caminho_grafico=caminho_grafico,
+    )
+
+
+# --------------------------------------------------------------------------
+# 7. Menu interativo
+# --------------------------------------------------------------------------
+
+OPCOES_MENU = [
+    ("1", "Número de nós e arestas"),
+    ("2", "Grau médio"),
+    ("3", "Distribuição de graus"),
+    ("4", "Densidade"),
+    ("5", "Clustering coefficient"),
+    ("6", "Average path length"),
+    ("7", "Diâmetro"),
+    ("8", "Componentes conexos"),
+    ("9", "Degree centrality"),
+    ("10", "Closeness centrality"),
+    ("11", "Betweenness centrality"),
+    ("12", "Eigenvector centrality"),
+    ("13", "PageRank"),
+    ("14", "Executar TODAS as métricas (relatório completo)"),
+    ("15", "Alterar configurações (modo exato/aproximado, amostra, top-k, gráfico)"),
+    ("0", "Sair"),
+]
+
+
+def exibir_menu(G, config):
+    n_nos = G.number_of_nodes()
+    n_arestas = G.number_of_edges()
+    modo = "EXATO" if config["exato"] else f"aproximado (amostra={config['sample_nodes']})"
+
+    print("\n" + "=" * 70)
+    print(" MENU PRINCIPAL — Análise de Grafo da Wikipedia")
+    print("=" * 70)
+    print(f" Grafo carregado: {n_nos:,} nós, {n_arestas:,} arestas")
+    print(f" Configurações atuais: modo={modo} | top-k={config['top_k']} | "
+          f"gráfico={'ligado' if config['plot'] else 'desligado'}")
+    print("-" * 70)
+    print(" --- Métricas estruturais básicas ---")
+    for chave, nome in OPCOES_MENU[0:8]:
+        print(f"  {chave:>2}. {nome}")
+    print(" --- Centralidade (nós mais importantes) ---")
+    for chave, nome in OPCOES_MENU[8:13]:
+        print(f"  {chave:>2}. {nome}")
+    print(" --- Outras opções ---")
+    for chave, nome in OPCOES_MENU[13:]:
+        print(f"  {chave:>2}. {nome}")
+    print("=" * 70)
+
+
+def menu_configuracoes(config):
+    """Submenu para alterar as configurações de cálculo em tempo de execução."""
+    while True:
+        print("\n" + "-" * 70)
+        print(" CONFIGURAÇÕES")
+        print("-" * 70)
+        print(f"  1. Modo de cálculo (atual: "
+              f"{'exato' if config['exato'] else 'aproximado'})")
+        print(f"  2. Tamanho da amostra para aproximações (atual: {config['sample_nodes']})")
+        print(f"  3. Top-k de nós exibidos nos rankings (atual: {config['top_k']})")
+        print(f"  4. Gerar gráfico da distribuição de graus (atual: "
+              f"{'sim' if config['plot'] else 'não'})")
+        print(f"  0. Voltar ao menu principal")
+        print("-" * 70)
+        escolha = input("Escolha uma opção: ").strip()
+
+        if escolha == "1":
+            resp = input("Usar modo EXATO para métricas caras? "
+                          "(pode ser muito lento em grafos grandes) [s/N]: ").strip().lower()
+            config["exato"] = resp == "s"
+        elif escolha == "2":
+            try:
+                config["sample_nodes"] = int(input("Novo tamanho de amostra: ").strip())
+            except ValueError:
+                print("Valor inválido, mantendo o anterior.")
+        elif escolha == "3":
+            try:
+                config["top_k"] = int(input("Novo valor de top-k: ").strip())
+            except ValueError:
+                print("Valor inválido, mantendo o anterior.")
+        elif escolha == "4":
+            resp = input("Gerar gráfico da distribuição de graus quando essa "
+                          "métrica for calculada? [s/N]: ").strip().lower()
+            config["plot"] = resp == "s"
+        elif escolha == "0":
+            return
+        else:
+            print("Opção inválida.")
+
+
+def executar_opcao(escolha, G, config):
+    """Executa a métrica correspondente à opção escolhida no menu."""
+    exato = config["exato"]
+    sample_nodes = config["sample_nodes"]
+    top_k_n = config["top_k"]
+
+    print()  # linha em branco antes do resultado
+    if escolha == "1":
+        imprimir_num_nos_arestas(G)
+    elif escolha == "2":
+        imprimir_grau_medio(G)
+    elif escolha == "3":
+        imprimir_distribuicao_graus(G, plot=config["plot"], caminho_grafico=config["plot_out"])
+    elif escolha == "4":
+        imprimir_densidade(G)
+    elif escolha == "5":
+        imprimir_clustering(G, exato, sample_nodes)
+    elif escolha == "6":
+        imprimir_average_path_length(G, exato, sample_nodes)
+    elif escolha == "7":
+        imprimir_diametro(G, exato, sample_nodes)
+    elif escolha == "8":
+        imprimir_componentes(G)
+    elif escolha == "9":
+        imprimir_degree_centrality(G, top_k_n)
+    elif escolha == "10":
+        imprimir_closeness_centrality(G, top_k_n)
+    elif escolha == "11":
+        imprimir_betweenness_centrality(G, exato, sample_nodes, top_k_n)
+    elif escolha == "12":
+        imprimir_eigenvector_centrality(G, top_k_n)
+    elif escolha == "13":
+        imprimir_pagerank(G, top_k_n)
+    elif escolha == "14":
+        gerar_relatorio_completo(
+            G, exato=exato, sample_nodes=sample_nodes, top_k_n=top_k_n,
+            plot=config["plot"], caminho_grafico=config["plot_out"],
+        )
+    else:
+        print("Opção inválida. Tente novamente.")
+
+
+def executar_menu_interativo(G, config):
+    """
+    Loop principal do menu: exibe as opções, executa a métrica escolhida e
+    volta a mostrar o menu, até o usuário optar por sair (opção 0).
+    """
+    while True:
+        exibir_menu(G, config)
+        escolha = input("Escolha uma opção: ").strip()
+
+        if escolha == "0":
+            print("Encerrando. Até mais!")
+            break
+        elif escolha == "15":
+            menu_configuracoes(config)
+        elif escolha in dict(OPCOES_MENU):
+            executar_opcao(escolha, G, config)
+            input("\nPressione Enter para voltar ao menu principal...")
+        else:
+            print("Opção inválida. Tente novamente.")
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Análise de grafo de links da Wikipedia (2006) a partir de um CSV."
+    )
+    parser.add_argument("csv", help="Caminho para o arquivo CSV de arestas.")
+    parser.add_argument("--nrows", type=int, default=None,
+                         help="Limitar número de linhas lidas do CSV (para testes rápidos).")
+    parser.add_argument("--exact", dest="exato", action="store_true",
+                         help="Forçar cálculo exato das métricas caras (pode ser muito lento). "
+                              "No modo menu, pode ser alterado depois na opção 'Configurações'.")
+    parser.add_argument("--sample-nodes", type=int, default=500,
+                         help="Tamanho da amostra para métricas aproximadas (default: 500).")
+    parser.add_argument("--top-k", type=int, default=10,
+                         help="Quantos nós mostrar em cada ranking de centralidade (default: 10).")
+    parser.add_argument("--plot", action="store_true",
+                         help="Gerar gráfico da distribuição de graus (degree_distribution.png).")
+    parser.add_argument("--plot-out", default="degree_distribution.png",
+                         help="Caminho de saída do gráfico de distribuição de graus.")
+    parser.add_argument("--sep", default=None,
+                         help="Forçar separador de campos manualmente (ex: '\\t' para TAB). "
+                              "Por padrão, é detectado automaticamente.")
+    parser.add_argument("--all", dest="modo_all", action="store_true",
+                         help="Executar TODAS as métricas de uma vez, sem menu interativo "
+                              "(comportamento não-interativo, útil para scripts/automação).")
+
+    args = parser.parse_args()
+
+    # permite passar --sep '\t' de forma literal na linha de comando
+    sep = args.sep.encode().decode("unicode_escape") if args.sep else None
+
+    if args.modo_all:
+        # modo não-interativo: roda tudo de uma vez e encerra
+        analisar_grafo(
+            caminho_csv=args.csv,
+            nrows=args.nrows,
+            exato=args.exato,
+            sample_nodes=args.sample_nodes,
+            top_k_n=args.top_k,
+            plot=args.plot,
+            caminho_grafico=args.plot_out,
+            sep=sep,
+        )
+        return
+
+    # modo interativo (padrão): carrega o grafo uma vez e abre o menu,
+    # permitindo escolher métricas individualmente sem recarregar o CSV
+    df = carregar_dados(args.csv, nrows=args.nrows, sep=sep)
+    G = construir_grafo(df)
+
+    config = {
+        "exato": args.exato,
+        "sample_nodes": args.sample_nodes,
+        "top_k": args.top_k,
+        "plot": args.plot,
+        "plot_out": args.plot_out,
+    }
+
+    executar_menu_interativo(G, config)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
