@@ -265,7 +265,7 @@ def densidade(G):
 
 
 @timeit
-def clustering_coefficient(G, amostra=None, seed=42):
+def clustering_coefficient(G):
     """
     Coeficiente de clustering médio (transitividade local média).
     NetworkX calcula clustering em grafos não-direcionados (ou trata o
@@ -277,15 +277,8 @@ def clustering_coefficient(G, amostra=None, seed=42):
     """
     Gu = G.to_undirected()
 
-    if amostra and Gu.number_of_nodes() > amostra:
-        random.seed(seed)
-        nos_amostrados = random.sample(list(Gu.nodes()), amostra)
-        coefs = nx.clustering(Gu, nodes=nos_amostrados)
-        media = sum(coefs.values()) / len(coefs)
-        return {"media_aproximada": media, "n_amostrados": amostra, "exato": False}
-    else:
-        media = nx.average_clustering(Gu)
-        return {"media": media, "exato": True}
+    media = nx.average_clustering(Gu)
+    return {"media": media, "exato": True}
 
 
 @timeit
@@ -326,80 +319,37 @@ def _maior_componente_fraco_como_subgrafo(G):
 
 
 @timeit
-def average_path_length(G, amostra_nos=None, seed=42):
+def average_path_length(G):
     """
     Comprimento médio do caminho mais curto.
 
     Exige que o grafo seja (fortemente, se direcionado) conexo para o
     cálculo exato do NetworkX. Como grafos reais raramente são totalmente
     conexos, aplicamos o cálculo sobre o maior componente conexo.
-
-    Se `amostra_nos` for informado, estima a métrica via amostragem de
-    pares de nós (Monte Carlo) — necessário para grafos grandes, pois o
-    cálculo exato é O(n*m).
     """
     Gu = G.to_undirected()
     componente = _maior_componente_fraco_como_subgrafo(Gu)
 
-    if amostra_nos and componente.number_of_nodes() > amostra_nos:
-        random.seed(seed)
-        nos = list(componente.nodes())
-        amostrados = random.sample(nos, amostra_nos)
-        distancias = []
-        for u in amostrados:
-            comprimentos = nx.single_source_shortest_path_length(componente, u)
-            distancias.extend(comprimentos.values())
-        # remove distância 0 (do nó para ele mesmo)
-        distancias = [d for d in distancias if d > 0]
-        media = sum(distancias) / len(distancias) if distancias else float("nan")
-        return {
-            "media_aproximada": media,
-            "n_amostrados": amostra_nos,
-            "n_nos_maior_componente": componente.number_of_nodes(),
-            "exato": False,
-        }
-    else:
-        media = nx.average_shortest_path_length(componente)
-        return {
-            "media": media,
-            "n_nos_maior_componente": componente.number_of_nodes(),
-            "exato": True,
-        }
+    media = nx.average_shortest_path_length(componente)
+    return {
+        "media": media,
+        "n_nos_maior_componente": componente.number_of_nodes(),
+        "exato": True,
+    }
 
 
 @timeit
-def diametro(G, amostra_nos=None, seed=42):
+def diametro(G):
     """
     Diâmetro do grafo (maior distância mínima entre dois nós), calculado
     sobre o maior componente conexo (versão não-direcionada).
-
-    Para grafos grandes, calcular o diâmetro exato é caro (equivalente a
-    calcular BFS a partir de todos os nós). Usamos a técnica de "dupla
-    varredura" (double sweep) como aproximação rápida e, opcionalmente,
-    amostragem de múltiplas fontes para refinar a estimativa (limite
-    inferior do diâmetro real).
     """
     Gu = G.to_undirected()
     componente = _maior_componente_fraco_como_subgrafo(Gu)
     n = componente.number_of_nodes()
 
-    if amostra_nos and n > amostra_nos:
-        random.seed(seed)
-        candidatos = random.sample(list(componente.nodes()), amostra_nos)
-        maior_excentricidade = 0
-        for u in candidatos:
-            comprimentos = nx.single_source_shortest_path_length(componente, u)
-            maior_local = max(comprimentos.values())
-            maior_excentricidade = max(maior_excentricidade, maior_local)
-        return {
-            "diametro_aproximado_limite_inferior": maior_excentricidade,
-            "n_amostrados": amostra_nos,
-            "n_nos_maior_componente": n,
-            "exato": False,
-        }
-    else:
-        d = nx.diameter(componente)
-        return {"diametro": d, "n_nos_maior_componente": n, "exato": True}
+    d = nx.diameter(componente)
+    return {"diametro": d, "n_nos_maior_componente": n, "exato": True}
 
 
 # --------------------------------------------------------------------------
@@ -560,9 +510,8 @@ def imprimir_densidade(G):
     return dens
 
 
-def imprimir_clustering(G, exato, sample_nodes):
-    amostra_cc = None if exato else sample_nodes
-    cc = clustering_coefficient(G, amostra=amostra_cc)
+def imprimir_clustering(G):
+    cc = clustering_coefficient(G)
     if cc.get("exato"):
         print(f"Clustering coefficient (médio, exato): {cc['media']:.6f}")
     else:
@@ -582,9 +531,8 @@ def imprimir_componentes(G):
     return comp
 
 
-def imprimir_average_path_length(G, exato, sample_nodes):
-    amostra_apl = None if exato else sample_nodes
-    apl = average_path_length(G, amostra_nos=amostra_apl)
+def imprimir_average_path_length(G):
+    apl = average_path_length(G)
     if apl.get("exato"):
         print(f"Average path length (exato, maior componente, "
               f"n={apl['n_nos_maior_componente']:,}): {apl['media']:.4f}")
@@ -595,9 +543,8 @@ def imprimir_average_path_length(G, exato, sample_nodes):
     return apl
 
 
-def imprimir_diametro(G, exato, sample_nodes):
-    amostra_diam = None if exato else sample_nodes
-    diam = diametro(G, amostra_nos=amostra_diam)
+def imprimir_diametro(G):
+    diam = diametro(G)
     if diam.get("exato"):
         print(f"Diâmetro (exato, maior componente): {diam['diametro']}")
     else:
@@ -665,10 +612,10 @@ def gerar_relatorio_completo(G, exato=False, sample_nodes=500, top_k_n=10,
     gm = imprimir_grau_medio(G)
     dist = imprimir_distribuicao_graus(G, plot=plot, caminho_grafico=caminho_grafico)
     dens = imprimir_densidade(G)
-    cc = imprimir_clustering(G, exato, sample_nodes)
+    cc = imprimir_clustering(G)
     comp = imprimir_componentes(G)
-    apl = imprimir_average_path_length(G, exato, sample_nodes)
-    diam = imprimir_diametro(G, exato, sample_nodes)
+    apl = imprimir_average_path_length(G)
+    diam = imprimir_diametro(G)
 
     print("\n" + "=" * 70)
     print("CENTRALIDADE — NÓS MAIS IMPORTANTES")
@@ -821,11 +768,11 @@ def executar_opcao(escolha, G, config):
     elif escolha == "4":
         imprimir_densidade(G)
     elif escolha == "5":
-        imprimir_clustering(G, exato, sample_nodes)
+        imprimir_clustering(G)
     elif escolha == "6":
-        imprimir_average_path_length(G, exato, sample_nodes)
+        imprimir_average_path_length(G)
     elif escolha == "7":
-        imprimir_diametro(G, exato, sample_nodes)
+        imprimir_diametro(G)
     elif escolha == "8":
         imprimir_componentes(G)
     elif escolha == "9":
