@@ -399,14 +399,14 @@ def plotar_distribuicao_de_graus(dist_graus, titulo="Distribuição de graus", c
 #    quanto pelo menu interativo, para evitar duplicação de código)
 # --------------------------------------------------------------------------
 
-def imprimir_num_nos_arestas(G):
+def print_graph_basic_data(G):
     n_nos, n_arestas = count_nodes_and_edges(G)
     print(f"Número de nós:     {n_nos:,}")
     print(f"Número de arestas: {n_arestas:,}")
     return n_nos, n_arestas
 
 
-def imprimir_grau_medio(G):
+def print_average_degree(G):
     gm = get_average_degree(G)
     print(f"Grau médio (in):    {gm['in_medio']:.4f}")
     print(f"Grau médio (out):   {gm['out_medio']:.4f}")
@@ -414,7 +414,7 @@ def imprimir_grau_medio(G):
     return gm
 
 
-def imprimir_distribuicao_graus(G, plot=False, caminho_grafico="degree_distribution.png"):
+def print_degree_distribution(G, plot=False, caminho_grafico="degree_distribution.png"):
     dist = get_degree_distribution(G, tipo="total")
     print(f"Distribuição de graus: {len(dist)} valores distintos de grau "
           f"(grau máximo observado: {max(dist)})")
@@ -429,13 +429,13 @@ def imprimir_distribuicao_graus(G, plot=False, caminho_grafico="degree_distribut
     return dist
 
 
-def imprimir_densidade(G):
+def print_density(G):
     dens = get_density(G)
     print(f"Densidade: {dens:.8f}")
     return dens
 
 
-def imprimir_clustering(G):
+def print_clustering_coefficient(G):
     cc = get_clustering_coefficient(G)
     if cc.get("exato"):
         print(f"Clustering coefficient (médio, exato): {cc['media']:.6f}")
@@ -445,7 +445,7 @@ def imprimir_clustering(G):
     return cc
 
 
-def imprimir_componentes(G):
+def print_components(G):
     comp = get_connected_components(G)
     print(f"Componentes fracamente conexos: {comp['n_componentes_fracos']} "
           f"(maior: {comp['maior_componente_fraco']:,} nós)")
@@ -456,7 +456,7 @@ def imprimir_componentes(G):
     return comp
 
 
-def imprimir_average_path_length(G):
+def print_average_path_length(G):
     apl = get_average_path_length(G)
     if apl.get("exato"):
         print(f"Average path length (exato, maior componente, "
@@ -468,7 +468,7 @@ def imprimir_average_path_length(G):
     return apl
 
 
-def imprimir_diametro(G):
+def print_diameter(G):
     diam = get_diameter(G)
     if diam.get("exato"):
         print(f"Diâmetro (exato, maior componente): {diam['diametro']}")
@@ -478,20 +478,20 @@ def imprimir_diametro(G):
     return diam
 
 
-def imprimir_degree_centrality(G, top_k_n):
+def print_degree_centrality(G, top_k_n):
     dc = centrality_metrics.compute_degree_centrality(G)
     imprimir_top_k("degree centrality (total)", top_k(dc["total"], G, top_k_n), top_k_n)
     return dc
 
 
-def imprimir_closeness_centrality(G, top_k_n):
+def print_closeness_centrality(G, top_k_n):
     log("Calculando closeness centrality (pode demorar em grafos grandes)...")
     clo = centrality_metrics.compute_closeness_centrality(G)
     imprimir_top_k("closeness centrality", top_k(clo, G, top_k_n), top_k_n)
     return clo
 
 
-def imprimir_betweenness_centrality(G, exato, sample_nodes, top_k_n):
+def print_betweenness_centrality(G, exato, sample_nodes, top_k_n):
     amostra_bet = None if exato else sample_nodes
     log("Calculando betweenness centrality (pode demorar bastante)...")
     bet = centrality_metrics.compute_betweenness_centrality(G, amostra_k=amostra_bet)
@@ -512,7 +512,7 @@ def imprimir_eigenvector_centrality(G, top_k_n):
     return eig
 
 
-def imprimir_pagerank(G, top_k_n):
+def print_pagerank(G, top_k_n):
     log("Calculando PageRank...")
     pr = centrality_metrics.compute_pagerank(G)
     imprimir_top_k("PageRank", top_k(pr, G, top_k_n), top_k_n)
@@ -523,7 +523,7 @@ def imprimir_pagerank(G, top_k_n):
 # 6. Orquestração — relatório completo (todas as métricas de uma vez)
 # --------------------------------------------------------------------------
 
-def gerar_relatorio_completo(G, exato=False, sample_nodes=500, top_k_n=10,
+def generate_complete_log(G, exato=False, sample_nodes=500, top_k_n=10,
                               plot=False, caminho_grafico="degree_distribution.png"):
     """
     Calcula e imprime TODAS as métricas, na ordem solicitada, para um grafo
@@ -533,24 +533,24 @@ def gerar_relatorio_completo(G, exato=False, sample_nodes=500, top_k_n=10,
     print("MÉTRICAS ESTRUTURAIS BÁSICAS")
     print("=" * 70)
 
-    n_nos, n_arestas = imprimir_num_nos_arestas(G)
-    gm = imprimir_grau_medio(G)
-    dist = imprimir_distribuicao_graus(G, plot=plot, caminho_grafico=caminho_grafico)
-    dens = imprimir_densidade(G)
-    cc = imprimir_clustering(G)
-    comp = imprimir_componentes(G)
-    apl = imprimir_average_path_length(G)
-    diam = imprimir_diametro(G)
+    n_nos, n_arestas = print_graph_basic_data(G)
+    gm = print_average_degree(G)
+    dist = print_degree_distribution(G, plot=plot, caminho_grafico=caminho_grafico)
+    dens = print_density(G)
+    cc = print_clustering_coefficient(G)
+    comp = print_components(G)
+    apl = print_average_path_length(G)
+    diam = print_diameter(G)
 
     print("\n" + "=" * 70)
     print("CENTRALIDADE — NÓS MAIS IMPORTANTES")
     print("=" * 70)
 
-    dc = imprimir_degree_centrality(G, top_k_n)
-    clo = imprimir_closeness_centrality(G, top_k_n)
-    bet = imprimir_betweenness_centrality(G, exato, sample_nodes, top_k_n)
+    dc = print_degree_centrality(G, top_k_n)
+    clo = print_closeness_centrality(G, top_k_n)
+    bet = print_betweenness_centrality(G, exato, sample_nodes, top_k_n)
     eig = imprimir_eigenvector_centrality(G, top_k_n)
-    pr = imprimir_pagerank(G, top_k_n)
+    pr = print_pagerank(G, top_k_n)
 
     return {
         "grafo": G,
@@ -571,7 +571,7 @@ def gerar_relatorio_completo(G, exato=False, sample_nodes=500, top_k_n=10,
     }
 
 
-def analisar_grafo(caminho_csv, nrows=None, exato=False, sample_nodes=500,
+def analyze_graph(caminho_csv, nrows=None, exato=False, sample_nodes=500,
                     top_k_n=10, plot=False, caminho_grafico="degree_distribution.png",
                     sep=None):
     """
@@ -583,7 +583,7 @@ def analisar_grafo(caminho_csv, nrows=None, exato=False, sample_nodes=500,
     """
     df = carregar_dados(caminho_csv, nrows=nrows, sep=sep)
     G = construir_grafo(df)
-    return gerar_relatorio_completo(
+    return generate_complete_log(
         G, exato=exato, sample_nodes=sample_nodes, top_k_n=top_k_n,
         plot=plot, caminho_grafico=caminho_grafico,
     )
@@ -593,7 +593,7 @@ def analisar_grafo(caminho_csv, nrows=None, exato=False, sample_nodes=500,
 # 7. Menu interativo
 # --------------------------------------------------------------------------
 
-OPCOES_MENU = [
+MENU_OPTIONS = [
     ("1", "Número de nós e arestas"),
     ("2", "Grau médio"),
     ("3", "Distribuição de graus"),
@@ -613,7 +613,7 @@ OPCOES_MENU = [
 ]
 
 
-def exibir_menu(G, config):
+def show_menu(G, config):
     n_nos = G.number_of_nodes()
     n_arestas = G.number_of_edges()
     modo = "EXATO" if config["exato"] else f"aproximado (amostra={config['sample_nodes']})"
@@ -626,18 +626,18 @@ def exibir_menu(G, config):
           f"gráfico={'ligado' if config['plot'] else 'desligado'}")
     print("-" * 70)
     print(" --- Métricas estruturais básicas ---")
-    for chave, nome in OPCOES_MENU[0:8]:
+    for chave, nome in MENU_OPTIONS[0:8]:
         print(f"  {chave:>2}. {nome}")
     print(" --- Centralidade (nós mais importantes) ---")
-    for chave, nome in OPCOES_MENU[8:13]:
+    for chave, nome in MENU_OPTIONS[8:13]:
         print(f"  {chave:>2}. {nome}")
     print(" --- Outras opções ---")
-    for chave, nome in OPCOES_MENU[13:]:
+    for chave, nome in MENU_OPTIONS[13:]:
         print(f"  {chave:>2}. {nome}")
     print("=" * 70)
 
 
-def menu_configuracoes(config):
+def menu_settings(config):
     """Submenu para alterar as configurações de cálculo em tempo de execução."""
     while True:
         print("\n" + "-" * 70)
@@ -677,7 +677,7 @@ def menu_configuracoes(config):
             print("Opção inválida.")
 
 
-def executar_opcao(escolha, G, config):
+def execute_option(escolha, G, config):
     """Executa a métrica correspondente à opção escolhida no menu."""
     exato = config["exato"]
     sample_nodes = config["sample_nodes"]
@@ -685,33 +685,33 @@ def executar_opcao(escolha, G, config):
 
     print()  # linha em branco antes do resultado
     if escolha == "1":
-        imprimir_num_nos_arestas(G)
+        print_graph_basic_data(G)
     elif escolha == "2":
-        imprimir_grau_medio(G)
+        print_average_degree(G)
     elif escolha == "3":
-        imprimir_distribuicao_graus(G, plot=config["plot"], caminho_grafico=config["plot_out"])
+        print_degree_distribution(G, plot=config["plot"], caminho_grafico=config["plot_out"])
     elif escolha == "4":
-        imprimir_densidade(G)
+        print_density(G)
     elif escolha == "5":
-        imprimir_clustering(G)
+        print_clustering_coefficient(G)
     elif escolha == "6":
-        imprimir_average_path_length(G)
+        print_average_path_length(G)
     elif escolha == "7":
-        imprimir_diametro(G)
+        print_diameter(G)
     elif escolha == "8":
-        imprimir_componentes(G)
+        print_components(G)
     elif escolha == "9":
-        imprimir_degree_centrality(G, top_k_n)
+        print_degree_centrality(G, top_k_n)
     elif escolha == "10":
-        imprimir_closeness_centrality(G, top_k_n)
+        print_closeness_centrality(G, top_k_n)
     elif escolha == "11":
-        imprimir_betweenness_centrality(G, exato, sample_nodes, top_k_n)
+        print_betweenness_centrality(G, exato, sample_nodes, top_k_n)
     elif escolha == "12":
         imprimir_eigenvector_centrality(G, top_k_n)
     elif escolha == "13":
-        imprimir_pagerank(G, top_k_n)
+        print_pagerank(G, top_k_n)
     elif escolha == "14":
-        gerar_relatorio_completo(
+        generate_complete_log(
             G, exato=exato, sample_nodes=sample_nodes, top_k_n=top_k_n,
             plot=config["plot"], caminho_grafico=config["plot_out"],
         )
@@ -719,22 +719,22 @@ def executar_opcao(escolha, G, config):
         print("Opção inválida. Tente novamente.")
 
 
-def executar_menu_interativo(G, config):
+def execute_interactive_menu(G, config):
     """
     Loop principal do menu: exibe as opções, executa a métrica escolhida e
     volta a mostrar o menu, até o usuário optar por sair (opção 0).
     """
     while True:
-        exibir_menu(G, config)
+        show_menu(G, config)
         escolha = input("Escolha uma opção: ").strip()
 
         if escolha == "0":
             print("Encerrando. Até mais!")
             break
         elif escolha == "15":
-            menu_configuracoes(config)
-        elif escolha in dict(OPCOES_MENU):
-            executar_opcao(escolha, G, config)
+            menu_settings(config)
+        elif escolha in dict(MENU_OPTIONS):
+            execute_option(escolha, G, config)
             input("\nPressione Enter para voltar ao menu principal...")
         else:
             print("Opção inválida. Tente novamente.")
@@ -776,7 +776,7 @@ def main():
 
     if args.modo_all:
         # modo não-interativo: roda tudo de uma vez e encerra
-        analisar_grafo(
+        analyze_graph(
             caminho_csv=args.csv,
             nrows=args.nrows,
             exato=args.exato,
@@ -801,7 +801,7 @@ def main():
         "plot_out": args.plot_out,
     }
 
-    executar_menu_interativo(G, config)
+    execute_interactive_menu(G, config)
 
 
 if __name__ == "__main__":
