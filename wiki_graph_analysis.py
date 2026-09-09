@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Análise de grafo de links da Wikipedia (2006)
 ================================================
