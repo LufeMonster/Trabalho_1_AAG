@@ -213,13 +213,13 @@ def rotulo(G, node_id):
 # --------------------------------------------------------------------------
 
 @timeit
-def num_nos_e_arestas(G):
+def count_nodes_and_edges(G):
     """Retorna (número de nós, número de arestas)."""
     return G.number_of_nodes(), G.number_of_edges()
 
 
 @timeit
-def grau_medio(G):
+def get_average_degree(G):
     """
     Grau médio do grafo.
     Para grafos direcionados, retorna in-degree médio e out-degree médio
@@ -242,7 +242,7 @@ def grau_medio(G):
 
 
 @timeit
-def distribuicao_de_graus(G, tipo="total"):
+def get_degree_distribution(G, tipo="total"):
     """
     Retorna a distribuição de graus como um Counter {grau: quantidade_de_nós}.
 
@@ -259,13 +259,13 @@ def distribuicao_de_graus(G, tipo="total"):
 
 
 @timeit
-def densidade(G):
+def get_density(G):
     """Densidade do grafo (proporção de arestas existentes sobre o máximo possível)."""
     return nx.density(G)
 
 
 @timeit
-def clustering_coefficient(G):
+def get_clustering_coefficient(G):
     """
     Coeficiente de clustering médio (transitividade local média).
     NetworkX calcula clustering em grafos não-direcionados (ou trata o
@@ -282,7 +282,7 @@ def clustering_coefficient(G):
 
 
 @timeit
-def componentes_conexos(G):
+def get_connected_components(G):
     """
     Para grafo direcionado, calcula:
       - número e tamanho dos componentes FRACAMENTE conexos (weakly connected)
@@ -305,7 +305,7 @@ def componentes_conexos(G):
     }
 
 
-def _maior_componente_fraco_como_subgrafo(G):
+def _biggest_component_as_subgraph(G):
     """
     Retorna o subgrafo correspondente ao maior componente conexo.
     Aceita tanto grafo direcionado (usa componentes fracamente conexos)
@@ -319,7 +319,7 @@ def _maior_componente_fraco_como_subgrafo(G):
 
 
 @timeit
-def average_path_length(G):
+def get_average_path_length(G):
     """
     Comprimento médio do caminho mais curto.
 
@@ -328,7 +328,7 @@ def average_path_length(G):
     conexos, aplicamos o cálculo sobre o maior componente conexo.
     """
     Gu = G.to_undirected()
-    componente = _maior_componente_fraco_como_subgrafo(Gu)
+    componente = _biggest_component_as_subgraph(Gu)
 
     media = nx.average_shortest_path_length(componente)
     return {
@@ -339,13 +339,13 @@ def average_path_length(G):
 
 
 @timeit
-def diametro(G):
+def get_diameter(G):
     """
     Diâmetro do grafo (maior distância mínima entre dois nós), calculado
     sobre o maior componente conexo (versão não-direcionada).
     """
     Gu = G.to_undirected()
-    componente = _maior_componente_fraco_como_subgrafo(Gu)
+    componente = _biggest_component_as_subgraph(Gu)
     n = componente.number_of_nodes()
 
     d = nx.diameter(componente)
@@ -357,7 +357,7 @@ def diametro(G):
 # --------------------------------------------------------------------------
 
 @timeit
-def degree_centrality(G):
+def compute_degree_centrality(G):
     """Degree centrality (in, out e total) para cada nó."""
     return {
         "in": nx.in_degree_centrality(G),
@@ -370,7 +370,7 @@ def degree_centrality(G):
 
 
 @timeit
-def closeness_centrality(G):
+def compute_closeness_centrality(G):
     """
     Closeness centrality. Usa a implementação do NetworkX, que já lida
     corretamente com grafos desconexos (normaliza pelo tamanho do
@@ -384,7 +384,7 @@ def closeness_centrality(G):
 
 
 @timeit
-def betweenness_centrality(G, amostra_k=None, seed=42):
+def compute_betweenness_centrality(G, amostra_k=None, seed=42):
     """
     Betweenness centrality.
 
@@ -398,7 +398,7 @@ def betweenness_centrality(G, amostra_k=None, seed=42):
 
 
 @timeit
-def eigenvector_centrality(G, max_iter=1000, tol=1e-06):
+def compute_eigenvector_centrality(G, max_iter=1000, tol=1e-06):
     """
     Eigenvector centrality. Pode não convergir em alguns grafos
     direcionados com estrutura patológica (ex: muitos nós sem
@@ -419,7 +419,7 @@ def eigenvector_centrality(G, max_iter=1000, tol=1e-06):
 
 
 @timeit
-def pagerank(G, alpha=0.85):
+def compute_pagerank(G, alpha=0.85):
     """
     PageRank — métrica natural e especialmente adequada para grafos de
     links da Wikipedia, já que foi originalmente desenhada para esse tipo
@@ -475,14 +475,14 @@ def plotar_distribuicao_de_graus(dist_graus, titulo="Distribuição de graus", c
 # --------------------------------------------------------------------------
 
 def imprimir_num_nos_arestas(G):
-    n_nos, n_arestas = num_nos_e_arestas(G)
+    n_nos, n_arestas = count_nodes_and_edges(G)
     print(f"Número de nós:     {n_nos:,}")
     print(f"Número de arestas: {n_arestas:,}")
     return n_nos, n_arestas
 
 
 def imprimir_grau_medio(G):
-    gm = grau_medio(G)
+    gm = get_average_degree(G)
     print(f"Grau médio (in):    {gm['in_medio']:.4f}")
     print(f"Grau médio (out):   {gm['out_medio']:.4f}")
     print(f"Grau médio (total): {gm['total_medio']:.4f}")
@@ -490,7 +490,7 @@ def imprimir_grau_medio(G):
 
 
 def imprimir_distribuicao_graus(G, plot=False, caminho_grafico="degree_distribution.png"):
-    dist = distribuicao_de_graus(G, tipo="total")
+    dist = get_degree_distribution(G, tipo="total")
     print(f"Distribuição de graus: {len(dist)} valores distintos de grau "
           f"(grau máximo observado: {max(dist)})")
     print("  (grau : nº de nós com esse grau) — 10 primeiros valores:")
@@ -505,13 +505,13 @@ def imprimir_distribuicao_graus(G, plot=False, caminho_grafico="degree_distribut
 
 
 def imprimir_densidade(G):
-    dens = densidade(G)
+    dens = get_density(G)
     print(f"Densidade: {dens:.8f}")
     return dens
 
 
 def imprimir_clustering(G):
-    cc = clustering_coefficient(G)
+    cc = get_clustering_coefficient(G)
     if cc.get("exato"):
         print(f"Clustering coefficient (médio, exato): {cc['media']:.6f}")
     else:
@@ -521,7 +521,7 @@ def imprimir_clustering(G):
 
 
 def imprimir_componentes(G):
-    comp = componentes_conexos(G)
+    comp = get_connected_components(G)
     print(f"Componentes fracamente conexos: {comp['n_componentes_fracos']} "
           f"(maior: {comp['maior_componente_fraco']:,} nós)")
     print(f"  Top 5 tamanhos: {comp['tamanhos_fracos_top5']}")
@@ -532,7 +532,7 @@ def imprimir_componentes(G):
 
 
 def imprimir_average_path_length(G):
-    apl = average_path_length(G)
+    apl = get_average_path_length(G)
     if apl.get("exato"):
         print(f"Average path length (exato, maior componente, "
               f"n={apl['n_nos_maior_componente']:,}): {apl['media']:.4f}")
@@ -544,7 +544,7 @@ def imprimir_average_path_length(G):
 
 
 def imprimir_diametro(G):
-    diam = diametro(G)
+    diam = get_diameter(G)
     if diam.get("exato"):
         print(f"Diâmetro (exato, maior componente): {diam['diametro']}")
     else:
@@ -554,14 +554,14 @@ def imprimir_diametro(G):
 
 
 def imprimir_degree_centrality(G, top_k_n):
-    dc = degree_centrality(G)
+    dc = compute_degree_centrality(G)
     imprimir_top_k("degree centrality (total)", top_k(dc["total"], G, top_k_n), top_k_n)
     return dc
 
 
 def imprimir_closeness_centrality(G, top_k_n):
     log("Calculando closeness centrality (pode demorar em grafos grandes)...")
-    clo = closeness_centrality(G)
+    clo = compute_closeness_centrality(G)
     imprimir_top_k("closeness centrality", top_k(clo, G, top_k_n), top_k_n)
     return clo
 
@@ -569,7 +569,7 @@ def imprimir_closeness_centrality(G, top_k_n):
 def imprimir_betweenness_centrality(G, exato, sample_nodes, top_k_n):
     amostra_bet = None if exato else sample_nodes
     log("Calculando betweenness centrality (pode demorar bastante)...")
-    bet = betweenness_centrality(G, amostra_k=amostra_bet)
+    bet = compute_betweenness_centrality(G, amostra_k=amostra_bet)
     imprimir_top_k(
         f"betweenness centrality {'(aproximado, k=' + str(amostra_bet) + ')' if amostra_bet else '(exato)'}",
         top_k(bet, G, top_k_n), top_k_n,
@@ -579,7 +579,7 @@ def imprimir_betweenness_centrality(G, exato, sample_nodes, top_k_n):
 
 def imprimir_eigenvector_centrality(G, top_k_n):
     log("Calculando eigenvector centrality...")
-    eig = eigenvector_centrality(G)
+    eig = compute_eigenvector_centrality(G)
     if eig is not None:
         imprimir_top_k("eigenvector centrality", top_k(eig, G, top_k_n), top_k_n)
     else:
@@ -589,7 +589,7 @@ def imprimir_eigenvector_centrality(G, top_k_n):
 
 def imprimir_pagerank(G, top_k_n):
     log("Calculando PageRank...")
-    pr = pagerank(G)
+    pr = compute_pagerank(G)
     imprimir_top_k("PageRank", top_k(pr, G, top_k_n), top_k_n)
     return pr
 
