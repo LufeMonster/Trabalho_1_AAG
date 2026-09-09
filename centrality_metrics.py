@@ -1,5 +1,7 @@
 import networkx as nx
+import Utilities
 
+@Utilities.timeit
 def compute_degree_centrality(G):
     """Degree centrality (in, out e total) para cada nó."""
     return {
@@ -11,7 +13,7 @@ def compute_degree_centrality(G):
         } if G.number_of_nodes() > 1 else {n: 0 for n in G.nodes()},
     }
 
-
+@Utilities.timeit
 def compute_closeness_centrality(G):
     """
     Closeness centrality. Usa a implementação do NetworkX, que já lida
@@ -24,7 +26,7 @@ def compute_closeness_centrality(G):
     """
     return nx.closeness_centrality(G.reverse())
 
-
+@Utilities.timeit
 def compute_betweenness_centrality(G, amostra_k=None, seed=42):
     """
     Betweenness centrality.
@@ -37,7 +39,7 @@ def compute_betweenness_centrality(G, amostra_k=None, seed=42):
         return nx.betweenness_centrality(G, k=amostra_k, seed=seed, normalized=True)
     return nx.betweenness_centrality(G, normalized=True)
 
-
+@Utilities.timeit
 def compute_eigenvector_centrality(G, max_iter=1000, tol=1e-06):
     """
     Eigenvector centrality. Pode não convergir em alguns grafos
@@ -48,16 +50,16 @@ def compute_eigenvector_centrality(G, max_iter=1000, tol=1e-06):
     try:
         return nx.eigenvector_centrality(G, max_iter=max_iter, tol=tol)
     except nx.PowerIterationFailedConvergence:
-        log("  Aviso: eigenvector_centrality (power iteration) não convergiu; "
+        Utilities.log("  Aviso: eigenvector_centrality (power iteration) não convergiu; "
             "tentando eigenvector_centrality_numpy...")
         try:
             return nx.eigenvector_centrality_numpy(G)
         except Exception as e:
-            log(f"  Aviso: eigenvector_centrality_numpy também falhou ({e}). "
+            Utilities.log(f"  Aviso: eigenvector_centrality_numpy também falhou ({e}). "
                 "Retornando None.")
             return None
 
-
+@Utilities.timeit
 def compute_pagerank(G, alpha=0.85):
     """
     PageRank — métrica natural e especialmente adequada para grafos de

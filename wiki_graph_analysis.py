@@ -56,171 +56,31 @@ from collections import Counter
 import networkx as nx
 import pandas as pd
 
+import Graph
+import Utilities
 import centrality_metrics
+
+graph: Graph = Graph()
 
 
 # --------------------------------------------------------------------------
 # Utilidades
 # --------------------------------------------------------------------------
 
-def log(msg):
-    """Imprime mensagens de progresso com timestamp relativo simples."""
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
-
-
-def timeit(func):
-    """Decorator simples para medir e reportar o tempo de cada etapa."""
-    def wrapper(*args, **kwargs):
-        t0 = time.time()
-        result = func(*args, **kwargs)
-        dt = time.time() - t0
-        log(f"  -> '{func.__name__}' concluída em {dt:.2f}s")
-        return result
-    return wrapper
-
-
 # --------------------------------------------------------------------------
 # 1. Leitura dos dados e construção do grafo
 # --------------------------------------------------------------------------
-
-def _detectar_separador(caminho_csv):
-    """
-    Tenta detectar automaticamente o separador de campos do arquivo.
-
-    Datasets de grafo de links da Wikipedia (ex: o dataset "wikilinkgraphs"
-    de Consonni et al.) costumam vir com extensão .csv mas separados por
-    TAB, não por vírgula. Ler um arquivo TAB-separado como se fosse
-    vírgula-separado faz o pandas enxergar "1 coluna" na maior parte das
-    linhas e quebrar (ParserError) assim que algum título de página contiver
-    uma vírgula.
-
-    Estratégia: olhamos a primeira linha não vazia e contamos ocorrências
-    de cada separador candidato; escolhemos o que aparece mais vezes.
-    """
-    candidatos = ["\t", ",", ";", "|"]
-
-    with open(caminho_csv, "r", encoding="utf-8", errors="replace") as f:
-        primeira_linha = f.readline()
-
-    contagens = {sep: primeira_linha.count(sep) for sep in candidatos}
-    melhor_sep = max(contagens, key=contagens.get)
-
-    if contagens[melhor_sep] == 0:
-        # nenhum separador candidato encontrado; assume vírgula como último recurso
-        return ","
-
-    return melhor_sep
-
-
-@timeit
-def carregar_dados(caminho_csv, nrows=None, sep=None):
-    """
-    Lê o CSV/TSV de arestas da Wikipedia.
-
-    Espera colunas: page_id_from, page_title_from, page_id_to, page_title_to
-    (aceita variações comuns de nome de coluna, ver `rename_map` abaixo).
-
-    O parâmetro `sep` permite forçar o separador manualmente (ex: '\\t').
-    Se `sep=None` (padrão), o separador é detectado automaticamente —
-    importante porque vários datasets desse tipo (ex: o dataset
-    "wikilinkgraphs") usam TAB como separador apesar da extensão .csv.
-    """
-    if sep is None:
-        sep = _detectar_separador(caminho_csv)
-        rotulo_sep = {"\t": "TAB", ",": "vírgula", ";": "ponto-e-vírgula", "|": "pipe"}.get(sep, repr(sep))
-        log(f"Separador detectado automaticamente: {rotulo_sep}")
-
-    log(f"Lendo arquivo CSV: {caminho_csv}")
-    try:
-        df = pd.read_csv(caminho_csv, nrows=nrows, sep=sep, engine="c")
-    except pd.errors.ParserError:
-        # fallback: parser mais tolerante (mais lento, porém mais robusto
-        # a linhas malformadas / separadores inconsistentes)
-        log("  Aviso: falha ao ler com o parser rápido; tentando novamente "
-            "com engine='python' (mais lento, porém mais tolerante)...")
-        df = pd.read_csv(caminho_csv, nrows=nrows, sep=sep, engine="python",
-                          on_bad_lines="warn")
-
-    # normaliza nomes de coluna (tolera maiúsculas/minúsculas e pequenas variações)
-    rename_map = {}
-    cols_lower = {c.lower().strip(): c for c in df.columns}
-
-    aliases = {
-        "page_id_from": ["page_id_from", "id_from", "source_id", "from_id"],
-        "page_title_from": ["page_title_from", "title_from", "source", "from_title"],
-        "page_id_to": ["page_id_to", "id_to", "target_id", "to_id"],
-        "page_title_to": ["page_title_to", "title_to", "target", "to_title"],
-    }
-
-    for padrao, opcoes in aliases.items():
-        for op in opcoes:
-            if op in cols_lower:
-                rename_map[cols_lower[op]] = padrao
-                break
-
-    df = df.rename(columns=rename_map)
-
-    colunas_esperadas = ["page_id_from", "page_title_from", "page_id_to", "page_title_to"]
-    faltando = [c for c in colunas_esperadas if c not in df.columns]
-    if faltando:
-        raise ValueError(
-            f"Colunas ausentes no CSV: {faltando}. "
-            f"Colunas encontradas: {list(df.columns)}"
-        )
-
-    df = df.dropna(subset=["page_id_from", "page_id_to"])
-    log(f"  {len(df):,} linhas (arestas brutas) carregadas.")
-    return df
-
-
-@timeit
-def construir_grafo(df, usar_titulos_como_rotulo=True):
-    """
-    Constrói um grafo direcionado (DiGraph) do NetworkX a partir do
-    DataFrame de arestas.
-
-    Usa page_id como identificador do nó (mais confiável que o título,
-    que pode ter duplicatas/ambiguidades) e guarda o título como atributo
-    'title' do nó, se disponível.
-    """
-    G = nx.DiGraph()
-
-    # adiciona nós com atributo de título
-    nos_from = df[["page_id_from", "page_title_from"]].rename(
-        columns={"page_id_from": "id", "page_title_from": "title"}
-    )
-    nos_to = df[["page_id_to", "page_title_to"]].rename(
-        columns={"page_id_to": "id", "page_title_to": "title"}
-    )
-    nos = pd.concat([nos_from, nos_to]).drop_duplicates(subset="id")
-
-    for _, row in nos.iterrows():
-        G.add_node(row["id"], title=row["title"] if usar_titulos_como_rotulo else row["id"])
-
-    # adiciona arestas (remove self-loops duplicados automaticamente via set)
-    arestas = list(zip(df["page_id_from"], df["page_id_to"]))
-    G.add_edges_from(arestas)
-
-    log(f"  Grafo construído: {G.number_of_nodes():,} nós, {G.number_of_edges():,} arestas.")
-    return G
-
-
-def rotulo(G, node_id):
-    """Retorna um rótulo legível (título) para um id de nó, se existir."""
-    return G.nodes[node_id].get("title", str(node_id))
-
 
 # --------------------------------------------------------------------------
 # 2. Métricas estruturais básicas
 # --------------------------------------------------------------------------
 
-@timeit
+@Utilities.timeit
 def count_nodes_and_edges(G):
     """Retorna (número de nós, número de arestas)."""
     return G.number_of_nodes(), G.number_of_edges()
 
-
-@timeit
+@Utilities.timeit
 def get_average_degree(G):
     """
     Grau médio do grafo.
@@ -243,7 +103,7 @@ def get_average_degree(G):
     }
 
 
-@timeit
+@Utilities.timeit
 def get_degree_distribution(G, tipo="total"):
     """
     Retorna a distribuição de graus como um Counter {grau: quantidade_de_nós}.
@@ -260,13 +120,13 @@ def get_degree_distribution(G, tipo="total"):
     return Counter(graus)
 
 
-@timeit
+@Utilities.timeit
 def get_density(G):
     """Densidade do grafo (proporção de arestas existentes sobre o máximo possível)."""
     return nx.density(G)
 
 
-@timeit
+@Utilities.timeit
 def get_clustering_coefficient(G):
     """
     Coeficiente de clustering médio (transitividade local média).
@@ -283,7 +143,7 @@ def get_clustering_coefficient(G):
     return {"media": media, "exato": True}
 
 
-@timeit
+@Utilities.timeit
 def get_connected_components(G):
     """
     Para grafo direcionado, calcula:
@@ -320,7 +180,7 @@ def _biggest_component_as_subgraph(G):
     return G.subgraph(maior).copy()
 
 
-@timeit
+@Utilities.timeit
 def get_average_path_length(G):
     """
     Comprimento médio do caminho mais curto.
@@ -340,7 +200,7 @@ def get_average_path_length(G):
     }
 
 
-@timeit
+@Utilities.timeit
 def get_diameter(G):
     """
     Diâmetro do grafo (maior distância mínima entre dois nós), calculado
@@ -360,7 +220,7 @@ def get_diameter(G):
 def top_k(dicionario, G, k=10):
     """Retorna os k nós com maior valor em `dicionario`, já com rótulo (título)."""
     ordenado = sorted(dicionario.items(), key=lambda x: x[1], reverse=True)[:k]
-    return [(rotulo(G, nid), nid, valor) for nid, valor in ordenado]
+    return [(graph.rotulo(G, nid), nid, valor) for nid, valor in ordenado]
 
 
 def imprimir_top_k(nome_metrica, lista_top, k=10):
@@ -390,7 +250,7 @@ def plotar_distribuicao_de_graus(dist_graus, titulo="Distribuição de graus", c
 
     if caminho_saida:
         fig.savefig(caminho_saida, dpi=150)
-        log(f"Gráfico salvo em: {caminho_saida}")
+        Utilities.log(f"Gráfico salvo em: {caminho_saida}")
     plt.close(fig)
 
 
@@ -485,7 +345,7 @@ def print_degree_centrality(G, top_k_n):
 
 
 def print_closeness_centrality(G, top_k_n):
-    log("Calculando closeness centrality (pode demorar em grafos grandes)...")
+    Utilities.log("Calculando closeness centrality (pode demorar em grafos grandes)...")
     clo = centrality_metrics.compute_closeness_centrality(G)
     imprimir_top_k("closeness centrality", top_k(clo, G, top_k_n), top_k_n)
     return clo
@@ -493,7 +353,7 @@ def print_closeness_centrality(G, top_k_n):
 
 def print_betweenness_centrality(G, exato, sample_nodes, top_k_n):
     amostra_bet = None if exato else sample_nodes
-    log("Calculando betweenness centrality (pode demorar bastante)...")
+    Utilities.log("Calculando betweenness centrality (pode demorar bastante)...")
     bet = centrality_metrics.compute_betweenness_centrality(G, amostra_k=amostra_bet)
     imprimir_top_k(
         f"betweenness centrality {'(aproximado, k=' + str(amostra_bet) + ')' if amostra_bet else '(exato)'}",
@@ -503,7 +363,7 @@ def print_betweenness_centrality(G, exato, sample_nodes, top_k_n):
 
 
 def imprimir_eigenvector_centrality(G, top_k_n):
-    log("Calculando eigenvector centrality...")
+    Utilities.log("Calculando eigenvector centrality...")
     eig = centrality_metrics.compute_eigenvector_centrality(G)
     if eig is not None:
         imprimir_top_k("eigenvector centrality", top_k(eig, G, top_k_n), top_k_n)
@@ -513,7 +373,7 @@ def imprimir_eigenvector_centrality(G, top_k_n):
 
 
 def print_pagerank(G, top_k_n):
-    log("Calculando PageRank...")
+    Utilities.log("Calculando PageRank...")
     pr = centrality_metrics.compute_pagerank(G)
     imprimir_top_k("PageRank", top_k(pr, G, top_k_n), top_k_n)
     return pr
@@ -581,8 +441,8 @@ def analyze_graph(caminho_csv, nrows=None, exato=False, sample_nodes=500,
     Mantido para uso não-interativo / programático (ex: chamar a partir de
     outro script ou notebook, ou via a flag --all no modo CLI).
     """
-    df = carregar_dados(caminho_csv, nrows=nrows, sep=sep)
-    G = construir_grafo(df)
+    df = graph.carregar_dados(caminho_csv, nrows=nrows, sep=sep)
+    G = graph.construir_grafo(df)
     return generate_complete_log(
         G, exato=exato, sample_nodes=sample_nodes, top_k_n=top_k_n,
         plot=plot, caminho_grafico=caminho_grafico,
@@ -790,8 +650,8 @@ def main():
 
     # modo interativo (padrão): carrega o grafo uma vez e abre o menu,
     # permitindo escolher métricas individualmente sem recarregar o CSV
-    df = carregar_dados(args.csv, nrows=args.nrows, sep=sep)
-    G = construir_grafo(df)
+    df = graph.carregar_dados(args.csv, nrows=args.nrows, sep=sep)
+    G = graph.construir_grafo(df)
 
     config = {
         "exato": args.exato,
