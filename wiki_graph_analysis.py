@@ -48,17 +48,14 @@ Uso:
 """
 
 import argparse
-import random
 import sys
-import time
 from collections import Counter
-from utilities import Utilities
-from graph import Graph
 
 import networkx as nx
-import pandas as pd
 
 import centrality_metrics
+from graph import Graph
+from utilities import Utilities
 
 graph: Graph = Graph()
 
