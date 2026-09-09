@@ -52,15 +52,15 @@ import random
 import sys
 import time
 from collections import Counter
+from utilities import Utilities
 
 import networkx as nx
 import pandas as pd
 
 import Graph
-import Utilities
 import centrality_metrics
 
-graph: Graph = Graph()
+graph: Graph = Graph.Graph()
 
 
 # --------------------------------------------------------------------------

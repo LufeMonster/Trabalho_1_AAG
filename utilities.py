@@ -1,6 +1,9 @@
 import time
 
 class Utilities:
+    def __init__(self):
+            pass
+    
     @staticmethod
     def log(msg):
             """Imprime mensagens de progresso com timestamp relativo simples."""

@@ -1,6 +1,6 @@
 import networkx as nx
 import pandas as pd
-import Utilities
+from utilities import Utilities
 
 class Graph:
     def __init__(self):

@@ -1,5 +1,5 @@
 import networkx as nx
-import Utilities
+from utilities import Utilities
 
 @Utilities.timeit
 def compute_degree_centrality(G):
