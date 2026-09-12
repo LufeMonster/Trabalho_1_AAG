@@ -1,91 +1,131 @@
-# Análise de Grafo — Wikipedia 2006
+# Graph Analysis — Wikipedia Link Graph
 
-Script Python (`wiki_graph_analysis.py`) para analisar o grafo de links
-internos da Wikipedia em inglês (2006), a partir de um CSV no formato:
+Python script (`wiki_graph_analysis.py`) for analyzing the internal link
+graph of English Wikipedia, from a CSV file in the format:
 
 ```
 page_id_from, page_title_from, page_id_to, page_title_to
 ```
 
-## Instalação
+The script works with any dump in this format — the examples below use an
+English Wikipedia 2003 link-graph dataset, but any similarly-shaped
+edge list will do.
+
+## Installation
 
 ```bash
 pip install networkx pandas matplotlib numpy scipy
-```//
-(`scipy` acelera bastante o cálculo de eigenvector centrality / PageRank
-via `nx.eigenvector_centrality_numpy`, e é opcional.)
+```
 
-## Uso básico
+(`scipy` significantly speeds up eigenvector centrality / PageRank via
+`nx.eigenvector_centrality_numpy`, and is optional.)
+
+## Basic usage
 
 ```bash
-python wiki_graph_analysis.py caminho/para/wikipedia_2006.csv
+python wiki_graph_analysis.py path/to/wikipedia_2003.csv
 ```
 
-Isso roda o pipeline completo e imprime um relatório no console com todas
-as métricas pedidas.
+This loads the graph once and opens an interactive menu where you can run
+individual metrics, or all of them at once, without re-reading the CSV.
 
-## Opções importantes
+For a one-shot, non-interactive run (useful for scripts/automation):
 
-| Flag | Descrição |
+```bash
+python wiki_graph_analysis.py path/to/wikipedia_2003.csv --all
+```
+
+## Important options
+
+| Flag | Description |
 |---|---|
-| `--nrows N` | Lê apenas as primeiras N linhas do CSV. Ótimo para testar rápido antes de rodar no arquivo completo (que pode ter milhões de linhas). |
-| `--exact` | Força o cálculo **exato** de métricas caras (average path length, diâmetro, betweenness centrality). Pode levar horas/dias em grafos com centenas de milhares de nós — use com cautela. |
-| `--sample-nodes N` | Tamanho da amostra usada nas aproximações (padrão: 500). Quanto maior, mais preciso e mais lento. |
-| `--top-k N` | Quantos nós mostrar em cada ranking de centralidade (padrão: 10). |
-| `--plot` | Gera `degree_distribution.png` com o gráfico log-log da distribuição de graus. |
-| `--plot-out caminho.png` | Define o caminho de saída do gráfico. |
+| `--nrows N` | Reads only the first N rows of the CSV. Great for quick testing before running on the full file (which can have millions of rows). |
+| `--exact` | Forces **exact** computation of the expensive metrics (clustering coefficient, average path length, diameter, betweenness centrality). Can take a very long time on graphs with hundreds of thousands of nodes — use with caution. |
+| `--sample-nodes N` | Sample size used for the approximations (default: 500). The larger it is, the more accurate and the slower. |
+| `--top-k N` | How many nodes to show in each centrality ranking (default: 10). |
+| `--plot` | Generates `degree_distribution.png` with a log-log plot of the degree distribution. |
+| `--plot-out path.png` | Sets the output path for the plot. |
+| `--sep` | Forces the field separator manually (e.g. `'\t'` for TAB). Auto-detected by default. |
+| `--all` | Runs every metric once and exits, skipping the interactive menu. |
 
-## Por que existe modo aproximado?
+## Why is there an approximate mode?
 
-O grafo de links da Wikipedia 2006 tende a ter **centenas de milhares de
-nós e milhões de arestas**. Algumas métricas clássicas são computacionalmente
-caras nesse tamanho:
+The Wikipedia link graph tends to have **hundreds of thousands of nodes
+and millions of edges**. Some classic metrics are computationally
+expensive at that scale:
 
-- **Betweenness centrality**: complexidade O(n·m) no algoritmo exato de
-  Brandes — inviável para grafos grandes. O script usa a versão com
-  amostragem (`k=sample_nodes`) do próprio NetworkX, que estima a métrica
-  a partir de um subconjunto de nós-fonte.
-- **Average path length** e **diâmetro**: exigem BFS a partir de (idealmente)
-  todos os nós. O script faz BFS apenas a partir de uma amostra de nós e
-  estima a média (average path length) ou um limite inferior (diâmetro).
-- **Clustering coefficient**: por padrão também calculado sobre amostra
-  quando o grafo é grande.
+- **Betweenness centrality**: O(n·m) complexity in Brandes' exact
+  algorithm — infeasible for large graphs. The script uses NetworkX's own
+  sampling variant (`k=sample_nodes`), which estimates the metric from a
+  subset of source nodes.
+- **Average path length**: an exact computation requires a BFS from every
+  node in the largest component. The script instead runs BFS from a
+  random sample of nodes and averages the resulting distances.
+- **Diameter**: an exact computation needs the eccentricity of every node.
+  The script estimates a lower bound by taking the largest eccentricity
+  found from a random sample of nodes — cheap to compute and always a
+  safe (conservative) estimate.
+- **Clustering coefficient**: by default also estimated over a sample of
+  nodes when `--exact` is not passed.
 
-Use `--exact` apenas em grafos pequenos/médios (até dezenas de milhares de
-nós, dependendo do hardware) ou tenha paciência — pode ser bem lento.
+By default (no `--exact`), all four of these metrics use the sampling
+approximation described above with `--sample-nodes` (default 500) source
+nodes. Pass `--exact` to compute them precisely instead — recommended
+only for small/medium graphs (up to a few tens of thousands of nodes,
+depending on your hardware), or if you're prepared to wait.
 
-## Recomendação de fluxo de trabalho
+All other metrics (node/edge counts, average degree, degree distribution,
+density, connected components, degree centrality, closeness centrality,
+eigenvector centrality, PageRank) are always computed exactly — they are
+cheap enough even on large graphs.
 
-1. Primeiro rode com `--nrows 5000` (ou similar) para validar que o CSV
-   está sendo lido corretamente e ver um relatório rápido.
-2. Depois rode no arquivo completo, sem `--exact`, para obter as métricas
-   aproximadas em tempo razoável.
-3. Se quiser refinar alguma métrica específica (ex: diâmetro exato do maior
-   componente), pode chamar as funções individualmente em um script/
-   notebook próprio, importando `wiki_graph_analysis.py` como módulo — todas
-   as funções (`densidade`, `pagerank`, `betweenness_centrality` etc.) podem
-   ser usadas separadamente:
+## Recommended workflow
+
+1. First run with `--nrows 5000` (or similar) to confirm the CSV is being
+   read correctly and to see a quick report.
+2. Then run on the full file without `--exact`, to get the approximate
+   metrics in a reasonable amount of time.
+3. If you want to refine a specific metric (e.g. the exact diameter of
+   the largest component), you can call the individual functions from
+   your own script/notebook by importing `wiki_graph_analysis.py` as a
+   module — every function (`get_density`, `compute_pagerank`,
+   `get_diameter`, etc.) can be used on its own:
 
 ```python
-from wiki_graph_analysis import carregar_dados, construir_grafo, pagerank
+from graph import Graph
+from wiki_graph_analysis import get_density, get_diameter
+import centrality_metrics
 
-df = carregar_dados("wikipedia_2006.csv")
-G = construir_grafo(df)
-pr = pagerank(G)
+g = Graph()
+df = g.load_data("wikipedia_2003.csv")
+G = g.build_graph(df)
+
+density = get_density(G)
+pr = centrality_metrics.compute_pagerank(G)
 ```
 
-## Sobre a direção do grafo
+## About the direction of the graph
 
-O grafo é **direcionado** (um link de A para B não implica B para A), o que
-é o correto para links da Wikipedia. Por isso:
+The graph is **directed** (a link from A to B does not imply B to A),
+which is the correct model for Wikipedia links. Because of that:
 
-- **PageRank** é calculado diretamente sobre o grafo direcionado (é a
-  aplicação original/clássica do algoritmo).
-- **Componentes conexos** são reportados tanto na versão fraca (ignorando
-  direção) quanto forte (respeitando direção).
-- **Clustering coefficient**, **average path length** e **diâmetro** usam
-  a versão não-direcionada do grafo, seguindo a convenção clássica dessas
-  métricas.
-- **Closeness centrality** é calculada sobre o grafo revertido (`G.reverse()`),
-  medindo o quão "central" um nó é do ponto de vista de quem chega até ele
-  — interpretação usual em redes de citação/links.
+- **PageRank** is computed directly on the directed graph (this is the
+  algorithm's original/classic application).
+- **Connected components** are reported both as weakly connected
+  (ignoring direction) and strongly connected (respecting direction).
+- **Clustering coefficient**, **average path length** and **diameter**
+  use the undirected version of the graph, following the classic
+  convention for these metrics.
+- **Closeness centrality** is computed on the reversed graph
+  (`G.reverse()`), measuring how "central" a node is from the point of
+  view of the nodes that link to it — the usual interpretation in
+  citation/link networks.
+
+## Project files
+
+| File | Purpose |
+|---|---|
+| `wiki_graph_analysis.py` | CLI entry point, orchestration, interactive menu, and the basic structural metrics (degree, density, clustering, path length, diameter, components). |
+| `centrality_metrics.py` | Centrality metrics: degree, closeness, betweenness, eigenvector, and PageRank. |
+| `graph.py` | CSV/TSV loading (with separator auto-detection) and graph construction. |
+| `utilities.py` | Small shared helpers: timestamped logging and a `@timeit` decorator used to time every step. |

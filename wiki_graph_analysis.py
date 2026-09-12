@@ -1,51 +1,52 @@
 """
-Análise de grafo de links da Wikipedia (2006)
-================================================
+Wikipedia Link Graph Analysis
+=============================
 
-Lê um arquivo CSV com colunas:
+Reads a CSV file with columns:
     page_id_from, page_title_from, page_id_to, page_title_to
 
-e calcula um conjunto de métricas clássicas de análise de redes/grafos:
+and computes a standard set of network/graph analysis metrics:
 
-Estrutura básica:
-    - número de nós e arestas
-    - grau médio
-    - distribuição de graus
-    - densidade
-    - clustering coefficient (coeficiente de agrupamento)
-    - average path length (comprimento médio do caminho)
-    - diâmetro
-    - componentes conexos
+Basic structure:
+    - number of nodes and edges
+    - average degree
+    - degree distribution
+    - density
+    - clustering coefficient
+    - average path length
+    - diameter
+    - connected components
 
-Centralidade (nós mais importantes):
+Centrality (most important nodes):
     - degree centrality
     - closeness centrality
     - betweenness centrality
     - eigenvector centrality
     - PageRank
 
-O grafo de links da Wikipedia é DIRECIONADO (um link de A para B não implica
-o inverso). O script constrói tanto a versão direcionada (para PageRank,
-componentes fortemente/fracamente conexos, etc.) quanto, quando necessário,
-trabalha com a versão não-direcionada (usada tradicionalmente para
-clustering coefficient, diâmetro "clássico" etc.).
+The Wikipedia link graph is DIRECTED (a link from A to B does not imply
+the reverse). The script builds the directed version (for PageRank,
+strongly/weakly connected components, etc.) and, when needed, also works
+with the undirected version (traditionally used for clustering
+coefficient, "classic" diameter, etc.).
 
-Como esse tipo de grafo real pode ter centenas de milhares/milhões de nós e
-arestas, algumas métricas (average path length, diâmetro, betweenness)
-possuem complexidade proibitiva para cálculo exato. Por isso o script:
-    - calcula essas métricas de forma EXATA quando o grafo é pequeno o
-      suficiente;
-    - usa AMOSTRAGEM (aproximação) automaticamente quando o grafo é grande,
-      deixando isso claro no output.
+Since real graphs like this can have hundreds of thousands or millions of
+nodes and edges, some metrics (average path length, diameter, betweenness)
+have prohibitive complexity for an exact computation. Because of that, the
+script:
+    - computes these metrics EXACTLY when the graph is small enough;
+    - automatically falls back to SAMPLING (approximation) when the graph
+      is large, and always makes this explicit in the output.
 
-Uso:
-    python wiki_graph_analysis.py caminho/para/arquivo.csv
-    python wiki_graph_analysis.py caminho/para/arquivo.csv --sample-nodes 500
-    python wiki_graph_analysis.py caminho/para/arquivo.csv --exact
-    python wiki_graph_analysis.py caminho/para/arquivo.csv --top-k 15 --plot
+Usage:
+    python wiki_graph_analysis.py path/to/file.csv
+    python wiki_graph_analysis.py path/to/file.csv --sample-nodes 500
+    python wiki_graph_analysis.py path/to/file.csv --exact
+    python wiki_graph_analysis.py path/to/file.csv --top-k 15 --plot
 """
 
 import argparse
+import random
 import sys
 from collections import Counter
 
@@ -59,365 +60,438 @@ graph: Graph = Graph()
 
 
 # --------------------------------------------------------------------------
-# Utilidades
+# 1. Data loading and graph construction -> see Graph.load_data / build_graph
 # --------------------------------------------------------------------------
 
 # --------------------------------------------------------------------------
-# 1. Leitura dos dados e construção do grafo
-# --------------------------------------------------------------------------
-
-# --------------------------------------------------------------------------
-# 2. Métricas estruturais básicas
+# 2. Basic structural metrics
 # --------------------------------------------------------------------------
 
 @Utilities.timeit
 def count_nodes_and_edges(G):
-    """Retorna (número de nós, número de arestas)."""
+    """Returns (number of nodes, number of edges)."""
     return G.number_of_nodes(), G.number_of_edges()
 
 @Utilities.timeit
 def get_average_degree(G):
     """
-    Grau médio do grafo.
-    Para grafos direcionados, retorna in-degree médio e out-degree médio
-    (que são sempre iguais em valor total, pois cada aresta contribui +1
-    para um out-degree e +1 para um in-degree), além do grau total médio
-    (in + out) por nó.
+    Average degree of the graph.
+    For directed graphs, returns the average in-degree and average
+    out-degree (which are always equal in total value, since every edge
+    contributes +1 to one out-degree and +1 to one in-degree), plus the
+    average total degree (in + out) per node.
     """
     n = G.number_of_nodes()
     if n == 0:
-        return {"in_medio": 0, "out_medio": 0, "total_medio": 0}
+        return {"in_average": 0, "out_average": 0, "total_average": 0}
 
-    soma_in = sum(d for _, d in G.in_degree())
-    soma_out = sum(d for _, d in G.out_degree())
+    in_sum = sum(d for _, d in G.in_degree())
+    out_sum = sum(d for _, d in G.out_degree())
 
     return {
-        "in_medio": soma_in / n,
-        "out_medio": soma_out / n,
-        "total_medio": (soma_in + soma_out) / n,
+        "in_average": in_sum / n,
+        "out_average": out_sum / n,
+        "total_average": (in_sum + out_sum) / n,
     }
 
 
 @Utilities.timeit
-def get_degree_distribution(G, tipo="total"):
+def get_degree_distribution(G, kind="total"):
     """
-    Retorna a distribuição de graus como um Counter {grau: quantidade_de_nós}.
+    Returns the degree distribution as a Counter {degree: number_of_nodes}.
 
-    tipo: 'in', 'out' ou 'total' (in+out), aplicável a grafos direcionados.
+    kind: 'in', 'out' or 'total' (in+out), applicable to directed graphs.
     """
-    if tipo == "in":
-        graus = [d for _, d in G.in_degree()]
-    elif tipo == "out":
-        graus = [d for _, d in G.out_degree()]
+    if kind == "in":
+        degrees = [d for _, d in G.in_degree()]
+    elif kind == "out":
+        degrees = [d for _, d in G.out_degree()]
     else:
-        graus = [G.in_degree(n) + G.out_degree(n) for n in G.nodes()]
+        degrees = [G.in_degree(n) + G.out_degree(n) for n in G.nodes()]
 
-    return Counter(graus)
+    return Counter(degrees)
 
 
 @Utilities.timeit
 def get_density(G):
-    """Densidade do grafo (proporção de arestas existentes sobre o máximo possível)."""
+    """Graph density (ratio of existing edges to the maximum possible)."""
     return nx.density(G)
 
 
 @Utilities.timeit
-def get_clustering_coefficient(G):
+def get_clustering_coefficient(G, exact=True, sample_nodes=500, seed=42, undirected=None):
     """
-    Coeficiente de clustering médio (transitividade local média).
-    NetworkX calcula clustering em grafos não-direcionados (ou trata o
-    direcionado com sua própria definição); aqui convertemos para
-    não-direcionado, que é a abordagem clássica (Watts-Strogatz).
+    Average clustering coefficient (average local transitivity).
+    NetworkX computes clustering on undirected graphs (or handles directed
+    graphs with its own definition); here we convert to undirected, which
+    is the classic (Watts-Strogatz) approach.
 
-    Se `amostra` for informado (int), calcula em uma amostra de nós para
-    grafos muito grandes (mais rápido, mas aproximado).
+    If `exact` is False, the average is estimated over a random sample of
+    `sample_nodes` nodes instead of the whole graph — much faster on large
+    graphs, at the cost of being an approximation.
+
+    `undirected` can be passed in to reuse an already-computed
+    `G.to_undirected()` instead of recomputing it here.
     """
-    Gu = G.to_undirected()
+    Gu = undirected if undirected is not None else G.to_undirected()
 
-    media = nx.average_clustering(Gu)
-    return {"media": media, "exato": True}
+    if exact:
+        average = nx.average_clustering(Gu)
+        return {"average": average, "exact": True}
+
+    n = Gu.number_of_nodes()
+    k = min(sample_nodes, n)
+    rng = random.Random(seed)
+    sample = rng.sample(list(Gu.nodes()), k) if k > 0 else []
+    approximate_average = nx.average_clustering(Gu, nodes=sample) if sample else 0.0
+    return {"approximate_average": approximate_average, "sampled_nodes": k, "exact": False}
 
 
 @Utilities.timeit
 def get_connected_components(G):
     """
-    Para grafo direcionado, calcula:
-      - número e tamanho dos componentes FRACAMENTE conexos (weakly connected)
-      - número e tamanho dos componentes FORTEMENTE conexos (strongly connected)
+    For a directed graph, computes:
+      - the number and size of WEAKLY connected components
+      - the number and size of STRONGLY connected components
     """
-    fracos = sorted(
+    weak = sorted(
         (len(c) for c in nx.weakly_connected_components(G)), reverse=True
     )
-    fortes = sorted(
+    strong = sorted(
         (len(c) for c in nx.strongly_connected_components(G)), reverse=True
     )
 
     return {
-        "n_componentes_fracos": len(fracos),
-        "maior_componente_fraco": fracos[0] if fracos else 0,
-        "tamanhos_fracos_top5": fracos[:5],
-        "n_componentes_fortes": len(fortes),
-        "maior_componente_forte": fortes[0] if fortes else 0,
-        "tamanhos_fortes_top5": fortes[:5],
+        "weak_component_count": len(weak),
+        "largest_weak_component": weak[0] if weak else 0,
+        "weak_top5_sizes": weak[:5],
+        "strong_component_count": len(strong),
+        "largest_strong_component": strong[0] if strong else 0,
+        "strong_top5_sizes": strong[:5],
     }
 
 
-def _biggest_component_as_subgraph(G):
+def _largest_component_as_subgraph(G):
     """
-    Retorna o subgrafo correspondente ao maior componente conexo.
-    Aceita tanto grafo direcionado (usa componentes fracamente conexos)
-    quanto já não-direcionado (usa componentes conexos "normais").
+    Returns the subgraph corresponding to the largest connected component.
+    Accepts either a directed graph (uses weakly connected components) or
+    an already-undirected graph (uses "regular" connected components).
     """
     if G.is_directed():
-        maior = max(nx.weakly_connected_components(G), key=len)
+        largest = max(nx.weakly_connected_components(G), key=len)
     else:
-        maior = max(nx.connected_components(G), key=len)
-    return G.subgraph(maior).copy()
+        largest = max(nx.connected_components(G), key=len)
+    return G.subgraph(largest).copy()
 
 
 @Utilities.timeit
-def get_average_path_length(G):
+def get_average_path_length(G, exact=True, sample_nodes=500, seed=42,
+                             undirected=None, component=None):
     """
-    Comprimento médio do caminho mais curto.
+    Average shortest path length.
 
-    Exige que o grafo seja (fortemente, se direcionado) conexo para o
-    cálculo exato do NetworkX. Como grafos reais raramente são totalmente
-    conexos, aplicamos o cálculo sobre o maior componente conexo.
+    NetworkX's exact calculation requires the graph to be (strongly, if
+    directed) connected. Since real graphs are rarely fully connected, we
+    apply the computation to the largest connected component.
+
+    If `exact` is False, the average is estimated by running a
+    single-source BFS from a random sample of `sample_nodes` nodes in the
+    largest component and averaging the resulting distances — this avoids
+    the O(n^2) cost of an all-pairs computation on large graphs.
+
+    `undirected` / `component` can be passed in to reuse graphs already
+    computed by the caller (see `generate_complete_log`).
     """
-    Gu = G.to_undirected()
-    componente = _biggest_component_as_subgraph(Gu)
+    Gu = undirected if undirected is not None else G.to_undirected()
+    comp = component if component is not None else _largest_component_as_subgraph(Gu)
+    n = comp.number_of_nodes()
 
-    media = nx.average_shortest_path_length(componente)
+    if exact:
+        average = nx.average_shortest_path_length(comp)
+        return {"average": average, "largest_component_nodes": n, "exact": True}
+
+    k = min(sample_nodes, n)
+    rng = random.Random(seed)
+    sample = rng.sample(list(comp.nodes()), k) if k > 0 else []
+
+    total_distance = 0
+    total_pairs = 0
+    for source in sample:
+        lengths = nx.single_source_shortest_path_length(comp, source)
+        total_distance += sum(d for target, d in lengths.items() if target != source)
+        total_pairs += len(lengths) - 1
+
+    approximate_average = total_distance / total_pairs if total_pairs else 0.0
     return {
-        "media": media,
-        "n_nos_maior_componente": componente.number_of_nodes(),
-        "exato": True,
+        "approximate_average": approximate_average,
+        "sampled_nodes": k,
+        "largest_component_nodes": n,
+        "exact": False,
     }
 
 
 @Utilities.timeit
-def get_diameter(G):
+def get_diameter(G, exact=True, sample_nodes=500, seed=42, undirected=None, component=None):
     """
-    Diâmetro do grafo (maior distância mínima entre dois nós), calculado
-    sobre o maior componente conexo (versão não-direcionada).
-    """
-    Gu = G.to_undirected()
-    componente = _biggest_component_as_subgraph(Gu)
-    n = componente.number_of_nodes()
+    Graph diameter (largest shortest-path distance between two nodes),
+    computed on the largest connected component (undirected version).
 
-    d = nx.diameter(componente)
-    return {"diametro": d, "n_nos_maior_componente": n, "exato": True}
+    If `exact` is False, estimates a LOWER BOUND for the diameter: it runs
+    a BFS-based eccentricity computation from a random sample of
+    `sample_nodes` nodes and returns the largest eccentricity found. This
+    is much cheaper than the exact algorithm (which needs eccentricities
+    from every node) and, being a lower bound, is a safe, conservative
+    estimate for large graphs.
+    """
+    Gu = undirected if undirected is not None else G.to_undirected()
+    comp = component if component is not None else _largest_component_as_subgraph(Gu)
+    n = comp.number_of_nodes()
+
+    if exact:
+        d = nx.diameter(comp)
+        return {"diameter": d, "largest_component_nodes": n, "exact": True}
+
+    k = min(sample_nodes, n)
+    rng = random.Random(seed)
+    sample = rng.sample(list(comp.nodes()), k) if k > 0 else []
+
+    lower_bound = 0
+    for source in sample:
+        lengths = nx.single_source_shortest_path_length(comp, source)
+        if lengths:
+            lower_bound = max(lower_bound, max(lengths.values()))
+
+    return {
+        "approximate_diameter_lower_bound": lower_bound,
+        "sampled_nodes": k,
+        "largest_component_nodes": n,
+        "exact": False,
+    }
 
 # --------------------------------------------------------------------------
-# 4. Relatórios / apresentação dos resultados
+# 3. Reports / result presentation
 # --------------------------------------------------------------------------
 
-def top_k(dicionario, G, k=10):
-    """Retorna os k nós com maior valor em `dicionario`, já com rótulo (título)."""
-    ordenado = sorted(dicionario.items(), key=lambda x: x[1], reverse=True)[:k]
-    return [(graph.rotulo(G, nid), nid, valor) for nid, valor in ordenado]
+def top_k(values_dict, G, k=10):
+    """Returns the k nodes with the highest value in `values_dict`, with labels (titles)."""
+    ranked = sorted(values_dict.items(), key=lambda x: x[1], reverse=True)[:k]
+    return [(graph.label(G, nid), nid, value) for nid, value in ranked]
 
 
-def imprimir_top_k(nome_metrica, lista_top, k=10):
-    print(f"\nTop {min(k, len(lista_top))} nós por {nome_metrica}:")
-    for i, (titulo, nid, valor) in enumerate(lista_top, start=1):
-        print(f"  {i:2d}. {titulo!r} (id={nid})  ->  {valor:.6f}")
+def print_top_k(metric_name, top_list, k=10):
+    print(f"\nTop {min(k, len(top_list))} nodes by {metric_name}:")
+    for i, (title, nid, value) in enumerate(top_list, start=1):
+        print(f"  {i:2d}. {title!r} (id={nid})  ->  {value:.6f}")
 
 
-def plotar_distribuicao_de_graus(dist_graus, titulo="Distribuição de graus", caminho_saida=None):
-    """Gera um gráfico log-log da distribuição de graus (típico de redes livres de escala)."""
+def plot_degree_distribution(degree_dist, title="Degree distribution", output_path=None):
+    """Generates a log-log plot of the degree distribution (typical of scale-free networks)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    graus = sorted(dist_graus.keys())
-    quantidades = [dist_graus[g] for g in graus]
+    degrees = sorted(degree_dist.keys())
+    counts = [degree_dist[d] for d in degrees]
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.scatter(graus, quantidades, s=12, alpha=0.7)
+    ax.scatter(degrees, counts, s=12, alpha=0.7)
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Grau (k)")
-    ax.set_ylabel("Número de nós com grau k")
-    ax.set_title(titulo)
+    ax.set_xlabel("Degree (k)")
+    ax.set_ylabel("Number of nodes with degree k")
+    ax.set_title(title)
     ax.grid(True, which="both", ls="--", alpha=0.3)
     fig.tight_layout()
 
-    if caminho_saida:
-        fig.savefig(caminho_saida, dpi=150)
-        Utilities.log(f"Gráfico salvo em: {caminho_saida}")
+    if output_path:
+        fig.savefig(output_path, dpi=150)
+        Utilities.log(f"Plot saved to: {output_path}")
     plt.close(fig)
 
 
 # --------------------------------------------------------------------------
-# 5. Funções de impressão por métrica (usadas tanto pelo relatório completo
-#    quanto pelo menu interativo, para evitar duplicação de código)
+# 4. Per-metric print functions (used both by the full report and by the
+#    interactive menu, to avoid code duplication)
 # --------------------------------------------------------------------------
 
 def print_graph_basic_data(G):
-    n_nos, n_arestas = count_nodes_and_edges(G)
-    print(f"Número de nós:     {n_nos:,}")
-    print(f"Número de arestas: {n_arestas:,}")
-    return n_nos, n_arestas
+    num_nodes, num_edges = count_nodes_and_edges(G)
+    print(f"Number of nodes: {num_nodes:,}")
+    print(f"Number of edges: {num_edges:,}")
+    return num_nodes, num_edges
 
 
 def print_average_degree(G):
-    gm = get_average_degree(G)
-    print(f"Grau médio (in):    {gm['in_medio']:.4f}")
-    print(f"Grau médio (out):   {gm['out_medio']:.4f}")
-    print(f"Grau médio (total): {gm['total_medio']:.4f}")
-    return gm
+    avg_degree = get_average_degree(G)
+    print(f"Average degree (in):    {avg_degree['in_average']:.4f}")
+    print(f"Average degree (out):   {avg_degree['out_average']:.4f}")
+    print(f"Average degree (total): {avg_degree['total_average']:.4f}")
+    return avg_degree
 
 
-def print_degree_distribution(G, plot=False, caminho_grafico="degree_distribution.png"):
-    dist = get_degree_distribution(G, tipo="total")
-    print(f"Distribuição de graus: {len(dist)} valores distintos de grau "
-          f"(grau máximo observado: {max(dist)})")
-    print("  (grau : nº de nós com esse grau) — 10 primeiros valores:")
-    for g in sorted(dist.keys())[:10]:
-        print(f"    {g:>4} : {dist[g]:,}")
+def print_degree_distribution(G, plot=False, plot_output_path="degree_distribution.png"):
+    dist = get_degree_distribution(G, kind="total")
+    print(f"Degree distribution: {len(dist)} distinct degree values "
+          f"(maximum degree observed: {max(dist)})")
+    print("  (degree : number of nodes with that degree) — first 10 values:")
+    for d in sorted(dist.keys())[:10]:
+        print(f"    {d:>4} : {dist[d]:,}")
     if plot:
-        plotar_distribuicao_de_graus(
-            dist, titulo="Distribuição de graus - Wikipedia 2006",
-            caminho_saida=caminho_grafico,
+        plot_degree_distribution(
+            dist, title="Wikipedia Link Graph - Degree Distribution",
+            output_path=plot_output_path,
         )
     return dist
 
 
 def print_density(G):
-    dens = get_density(G)
-    print(f"Densidade: {dens:.8f}")
-    return dens
+    density = get_density(G)
+    print(f"Density: {density:.8f}")
+    return density
 
 
-def print_clustering_coefficient(G):
-    cc = get_clustering_coefficient(G)
-    if cc.get("exato"):
-        print(f"Clustering coefficient (médio, exato): {cc['media']:.6f}")
+def print_clustering_coefficient(G, exact=True, sample_nodes=500, undirected=None):
+    clustering = get_clustering_coefficient(G, exact=exact, sample_nodes=sample_nodes, undirected=undirected)
+    if clustering.get("exact"):
+        print(f"Clustering coefficient (average, exact): {clustering['average']:.6f}")
     else:
-        print(f"Clustering coefficient (médio, aproximado, "
-              f"n={cc['n_amostrados']}): {cc['media_aproximada']:.6f}")
-    return cc
+        print(f"Clustering coefficient (average, approximate, "
+              f"n={clustering['sampled_nodes']}): {clustering['approximate_average']:.6f}")
+    return clustering
 
 
 def print_components(G):
     comp = get_connected_components(G)
-    print(f"Componentes fracamente conexos: {comp['n_componentes_fracos']} "
-          f"(maior: {comp['maior_componente_fraco']:,} nós)")
-    print(f"  Top 5 tamanhos: {comp['tamanhos_fracos_top5']}")
-    print(f"Componentes fortemente conexos: {comp['n_componentes_fortes']} "
-          f"(maior: {comp['maior_componente_forte']:,} nós)")
-    print(f"  Top 5 tamanhos: {comp['tamanhos_fortes_top5']}")
+    print(f"Weakly connected components: {comp['weak_component_count']} "
+          f"(largest: {comp['largest_weak_component']:,} nodes)")
+    print(f"  Top 5 sizes: {comp['weak_top5_sizes']}")
+    print(f"Strongly connected components: {comp['strong_component_count']} "
+          f"(largest: {comp['largest_strong_component']:,} nodes)")
+    print(f"  Top 5 sizes: {comp['strong_top5_sizes']}")
     return comp
 
 
-def print_average_path_length(G):
-    apl = get_average_path_length(G)
-    if apl.get("exato"):
-        print(f"Average path length (exato, maior componente, "
-              f"n={apl['n_nos_maior_componente']:,}): {apl['media']:.4f}")
+def print_average_path_length(G, exact=True, sample_nodes=500, undirected=None, component=None):
+    apl = get_average_path_length(G, exact=exact, sample_nodes=sample_nodes,
+                                   undirected=undirected, component=component)
+    if apl.get("exact"):
+        print(f"Average path length (exact, largest component, "
+              f"n={apl['largest_component_nodes']:,}): {apl['average']:.4f}")
     else:
-        print(f"Average path length (aproximado, amostra={apl['n_amostrados']}, "
-              f"maior componente n={apl['n_nos_maior_componente']:,}): "
-              f"{apl['media_aproximada']:.4f}")
+        print(f"Average path length (approximate, sample={apl['sampled_nodes']}, "
+              f"largest component n={apl['largest_component_nodes']:,}): "
+              f"{apl['approximate_average']:.4f}")
     return apl
 
 
-def print_diameter(G):
-    diam = get_diameter(G)
-    if diam.get("exato"):
-        print(f"Diâmetro (exato, maior componente): {diam['diametro']}")
+def print_diameter(G, exact=True, sample_nodes=500, undirected=None, component=None):
+    diam = get_diameter(G, exact=exact, sample_nodes=sample_nodes,
+                         undirected=undirected, component=component)
+    if diam.get("exact"):
+        print(f"Diameter (exact, largest component): {diam['diameter']}")
     else:
-        print(f"Diâmetro (limite inferior aproximado, amostra="
-              f"{diam['n_amostrados']}): {diam['diametro_aproximado_limite_inferior']}")
+        print(f"Diameter (approximate lower bound, sample="
+              f"{diam['sampled_nodes']}): {diam['approximate_diameter_lower_bound']}")
     return diam
 
 
 def print_degree_centrality(G, top_k_n):
     dc = centrality_metrics.compute_degree_centrality(G)
-    imprimir_top_k("degree centrality (total)", top_k(dc["total"], G, top_k_n), top_k_n)
+    print_top_k("degree centrality (total)", top_k(dc["total"], G, top_k_n), top_k_n)
     return dc
 
 
 def print_closeness_centrality(G, top_k_n):
-    Utilities.log("Calculando closeness centrality (pode demorar em grafos grandes)...")
+    Utilities.log("Computing closeness centrality (can take a while on large graphs)...")
     clo = centrality_metrics.compute_closeness_centrality(G)
-    imprimir_top_k("closeness centrality", top_k(clo, G, top_k_n), top_k_n)
+    print_top_k("closeness centrality", top_k(clo, G, top_k_n), top_k_n)
     return clo
 
 
-def print_betweenness_centrality(G, exato, sample_nodes, top_k_n):
-    amostra_bet = None if exato else sample_nodes
-    Utilities.log("Calculando betweenness centrality (pode demorar bastante)...")
-    bet = centrality_metrics.compute_betweenness_centrality(G, amostra_k=amostra_bet)
-    imprimir_top_k(
-        f"betweenness centrality {'(aproximado, k=' + str(amostra_bet) + ')' if amostra_bet else '(exato)'}",
+def print_betweenness_centrality(G, exact, sample_nodes, top_k_n):
+    sample_size = None if exact else min(sample_nodes, G.number_of_nodes())
+    Utilities.log("Computing betweenness centrality (can take a long time)...")
+    bet = centrality_metrics.compute_betweenness_centrality(G, sample_k=sample_size)
+    print_top_k(
+        f"betweenness centrality {'(approximate, k=' + str(sample_size) + ')' if sample_size else '(exact)'}",
         top_k(bet, G, top_k_n), top_k_n,
     )
     return bet
 
 
-def imprimir_eigenvector_centrality(G, top_k_n):
-    Utilities.log("Calculando eigenvector centrality...")
+def print_eigenvector_centrality(G, top_k_n):
+    Utilities.log("Computing eigenvector centrality...")
     eig = centrality_metrics.compute_eigenvector_centrality(G)
     if eig is not None:
-        imprimir_top_k("eigenvector centrality", top_k(eig, G, top_k_n), top_k_n)
+        print_top_k("eigenvector centrality", top_k(eig, G, top_k_n), top_k_n)
     else:
-        print("\nEigenvector centrality: não foi possível calcular (não convergiu).")
+        print("\nEigenvector centrality: could not be computed (did not converge).")
     return eig
 
 
 def print_pagerank(G, top_k_n):
-    Utilities.log("Calculando PageRank...")
+    Utilities.log("Computing PageRank...")
     pr = centrality_metrics.compute_pagerank(G)
-    imprimir_top_k("PageRank", top_k(pr, G, top_k_n), top_k_n)
+    print_top_k("PageRank", top_k(pr, G, top_k_n), top_k_n)
     return pr
 
 
 # --------------------------------------------------------------------------
-# 6. Orquestração — relatório completo (todas as métricas de uma vez)
+# 5. Orchestration — full report (all metrics at once)
 # --------------------------------------------------------------------------
 
-def generate_complete_log(G, exato=False, sample_nodes=500, top_k_n=10,
-                              plot=False, caminho_grafico="degree_distribution.png"):
+def generate_complete_log(G, exact=False, sample_nodes=500, top_k_n=10,
+                           plot=False, plot_output_path="degree_distribution.png"):
     """
-    Calcula e imprime TODAS as métricas, na ordem solicitada, para um grafo
-    G já carregado. Retorna um dicionário com todos os resultados.
+    Computes and prints ALL metrics, in the requested order, for an
+    already-loaded graph G. Returns a dictionary with all the results.
     """
     print("\n" + "=" * 70)
-    print("MÉTRICAS ESTRUTURAIS BÁSICAS")
+    print("BASIC STRUCTURAL METRICS")
     print("=" * 70)
 
-    n_nos, n_arestas = print_graph_basic_data(G)
-    gm = print_average_degree(G)
-    dist = print_degree_distribution(G, plot=plot, caminho_grafico=caminho_grafico)
-    dens = print_density(G)
-    cc = print_clustering_coefficient(G)
+    num_nodes, num_edges = print_graph_basic_data(G)
+    avg_degree = print_average_degree(G)
+    dist = print_degree_distribution(G, plot=plot, plot_output_path=plot_output_path)
+    density = print_density(G)
+
+    # The undirected graph and its largest connected component are reused
+    # by clustering coefficient, average path length and diameter instead
+    # of being recomputed for each metric — on a large graph, converting
+    # to undirected and finding weakly connected components are themselves
+    # expensive steps, so computing them once here avoids doing that work
+    # three times over.
+    undirected = G.to_undirected()
+    largest_component = _largest_component_as_subgraph(undirected)
+
+    clustering = print_clustering_coefficient(G, exact=exact, sample_nodes=sample_nodes, undirected=undirected)
     comp = print_components(G)
-    apl = print_average_path_length(G)
-    diam = print_diameter(G)
+    apl = print_average_path_length(G, exact=exact, sample_nodes=sample_nodes,
+                                     undirected=undirected, component=largest_component)
+    diam = print_diameter(G, exact=exact, sample_nodes=sample_nodes,
+                           undirected=undirected, component=largest_component)
 
     print("\n" + "=" * 70)
-    print("CENTRALIDADE — NÓS MAIS IMPORTANTES")
+    print("CENTRALITY — MOST IMPORTANT NODES")
     print("=" * 70)
 
     dc = print_degree_centrality(G, top_k_n)
     clo = print_closeness_centrality(G, top_k_n)
-    bet = print_betweenness_centrality(G, exato, sample_nodes, top_k_n)
-    eig = imprimir_eigenvector_centrality(G, top_k_n)
+    bet = print_betweenness_centrality(G, exact, sample_nodes, top_k_n)
+    eig = print_eigenvector_centrality(G, top_k_n)
     pr = print_pagerank(G, top_k_n)
 
     return {
-        "grafo": G,
-        "n_nos": n_nos,
-        "n_arestas": n_arestas,
-        "grau_medio": gm,
-        "distribuicao_graus": dist,
-        "densidade": dens,
-        "clustering": cc,
-        "componentes": comp,
+        "graph": G,
+        "num_nodes": num_nodes,
+        "num_edges": num_edges,
+        "average_degree": avg_degree,
+        "degree_distribution": dist,
+        "density": density,
+        "clustering": clustering,
+        "components": comp,
         "average_path_length": apl,
-        "diametro": diam,
+        "diameter": diam,
         "degree_centrality": dc,
         "closeness_centrality": clo,
         "betweenness_centrality": bet,
@@ -426,173 +500,173 @@ def generate_complete_log(G, exato=False, sample_nodes=500, top_k_n=10,
     }
 
 
-def analyze_graph(caminho_csv, nrows=None, exato=False, sample_nodes=500,
-                    top_k_n=10, plot=False, caminho_grafico="degree_distribution.png",
-                    sep=None):
+def analyze_graph(csv_path, nrows=None, exact=False, sample_nodes=500,
+                   top_k_n=10, plot=False, plot_output_path="degree_distribution.png",
+                   sep=None):
     """
-    Lê o CSV, constrói o grafo e executa o pipeline completo de análise
-    (todas as métricas de uma vez), imprimindo um relatório no console.
+    Reads the CSV, builds the graph and runs the full analysis pipeline
+    (all metrics at once), printing a report to the console.
 
-    Mantido para uso não-interativo / programático (ex: chamar a partir de
-    outro script ou notebook, ou via a flag --all no modo CLI).
+    Kept for non-interactive / programmatic use (e.g. calling from another
+    script or notebook, or via the --all flag in CLI mode).
     """
-    df = graph.carregar_dados(caminho_csv, nrows=nrows, sep=sep)
-    G = graph.construir_grafo(df)
+    df = graph.load_data(csv_path, nrows=nrows, sep=sep)
+    G = graph.build_graph(df)
     return generate_complete_log(
-        G, exato=exato, sample_nodes=sample_nodes, top_k_n=top_k_n,
-        plot=plot, caminho_grafico=caminho_grafico,
+        G, exact=exact, sample_nodes=sample_nodes, top_k_n=top_k_n,
+        plot=plot, plot_output_path=plot_output_path,
     )
 
 
 # --------------------------------------------------------------------------
-# 7. Menu interativo
+# 6. Interactive menu
 # --------------------------------------------------------------------------
 
 MENU_OPTIONS = [
-    ("1", "Número de nós e arestas"),
-    ("2", "Grau médio"),
-    ("3", "Distribuição de graus"),
-    ("4", "Densidade"),
+    ("1", "Number of nodes and edges"),
+    ("2", "Average degree"),
+    ("3", "Degree distribution"),
+    ("4", "Density"),
     ("5", "Clustering coefficient"),
     ("6", "Average path length"),
-    ("7", "Diâmetro"),
-    ("8", "Componentes conexos"),
+    ("7", "Diameter"),
+    ("8", "Connected components"),
     ("9", "Degree centrality"),
     ("10", "Closeness centrality"),
     ("11", "Betweenness centrality"),
     ("12", "Eigenvector centrality"),
     ("13", "PageRank"),
-    ("14", "Executar TODAS as métricas (relatório completo)"),
-    ("15", "Alterar configurações (modo exato/aproximado, amostra, top-k, gráfico)"),
-    ("0", "Sair"),
+    ("14", "Run ALL metrics (full report)"),
+    ("15", "Change settings (exact/approximate mode, sample size, top-k, plot)"),
+    ("0", "Exit"),
 ]
 
 
 def show_menu(G, config):
-    n_nos = G.number_of_nodes()
-    n_arestas = G.number_of_edges()
-    modo = "EXATO" if config["exato"] else f"aproximado (amostra={config['sample_nodes']})"
+    num_nodes = G.number_of_nodes()
+    num_edges = G.number_of_edges()
+    mode = "EXACT" if config["exact"] else f"approximate (sample={config['sample_nodes']})"
 
     print("\n" + "=" * 70)
-    print(" MENU PRINCIPAL — Análise de Grafo da Wikipedia")
+    print(" MAIN MENU — Wikipedia Graph Analysis")
     print("=" * 70)
-    print(f" Grafo carregado: {n_nos:,} nós, {n_arestas:,} arestas")
-    print(f" Configurações atuais: modo={modo} | top-k={config['top_k']} | "
-          f"gráfico={'ligado' if config['plot'] else 'desligado'}")
+    print(f" Graph loaded: {num_nodes:,} nodes, {num_edges:,} edges")
+    print(f" Current settings: mode={mode} | top-k={config['top_k']} | "
+          f"plot={'on' if config['plot'] else 'off'}")
     print("-" * 70)
-    print(" --- Métricas estruturais básicas ---")
-    for chave, nome in MENU_OPTIONS[0:8]:
-        print(f"  {chave:>2}. {nome}")
-    print(" --- Centralidade (nós mais importantes) ---")
-    for chave, nome in MENU_OPTIONS[8:13]:
-        print(f"  {chave:>2}. {nome}")
-    print(" --- Outras opções ---")
-    for chave, nome in MENU_OPTIONS[13:]:
-        print(f"  {chave:>2}. {nome}")
+    print(" --- Basic structural metrics ---")
+    for key, name in MENU_OPTIONS[0:8]:
+        print(f"  {key:>2}. {name}")
+    print(" --- Centrality (most important nodes) ---")
+    for key, name in MENU_OPTIONS[8:13]:
+        print(f"  {key:>2}. {name}")
+    print(" --- Other options ---")
+    for key, name in MENU_OPTIONS[13:]:
+        print(f"  {key:>2}. {name}")
     print("=" * 70)
 
 
 def menu_settings(config):
-    """Submenu para alterar as configurações de cálculo em tempo de execução."""
+    """Submenu for changing computation settings at runtime."""
     while True:
         print("\n" + "-" * 70)
-        print(" CONFIGURAÇÕES")
+        print(" SETTINGS")
         print("-" * 70)
-        print(f"  1. Modo de cálculo (atual: "
-              f"{'exato' if config['exato'] else 'aproximado'})")
-        print(f"  2. Tamanho da amostra para aproximações (atual: {config['sample_nodes']})")
-        print(f"  3. Top-k de nós exibidos nos rankings (atual: {config['top_k']})")
-        print(f"  4. Gerar gráfico da distribuição de graus (atual: "
-              f"{'sim' if config['plot'] else 'não'})")
-        print(f"  0. Voltar ao menu principal")
+        print(f"  1. Computation mode (current: "
+              f"{'exact' if config['exact'] else 'approximate'})")
+        print(f"  2. Sample size for approximations (current: {config['sample_nodes']})")
+        print(f"  3. Top-k nodes shown in rankings (current: {config['top_k']})")
+        print(f"  4. Generate degree-distribution plot (current: "
+              f"{'yes' if config['plot'] else 'no'})")
+        print(f"  0. Back to main menu")
         print("-" * 70)
-        escolha = input("Escolha uma opção: ").strip()
+        choice = input("Choose an option: ").strip()
 
-        if escolha == "1":
-            resp = input("Usar modo EXATO para métricas caras? "
-                          "(pode ser muito lento em grafos grandes) [s/N]: ").strip().lower()
-            config["exato"] = resp == "s"
-        elif escolha == "2":
+        if choice == "1":
+            response = input("Use EXACT mode for expensive metrics? "
+                          "(can be very slow on large graphs) [y/N]: ").strip().lower()
+            config["exact"] = response == "y"
+        elif choice == "2":
             try:
-                config["sample_nodes"] = int(input("Novo tamanho de amostra: ").strip())
+                config["sample_nodes"] = int(input("New sample size: ").strip())
             except ValueError:
-                print("Valor inválido, mantendo o anterior.")
-        elif escolha == "3":
+                print("Invalid value, keeping the previous one.")
+        elif choice == "3":
             try:
-                config["top_k"] = int(input("Novo valor de top-k: ").strip())
+                config["top_k"] = int(input("New top-k value: ").strip())
             except ValueError:
-                print("Valor inválido, mantendo o anterior.")
-        elif escolha == "4":
-            resp = input("Gerar gráfico da distribuição de graus quando essa "
-                          "métrica for calculada? [s/N]: ").strip().lower()
-            config["plot"] = resp == "s"
-        elif escolha == "0":
+                print("Invalid value, keeping the previous one.")
+        elif choice == "4":
+            response = input("Generate the degree-distribution plot whenever that "
+                          "metric is computed? [y/N]: ").strip().lower()
+            config["plot"] = response == "y"
+        elif choice == "0":
             return
         else:
-            print("Opção inválida.")
+            print("Invalid option.")
 
 
-def execute_option(escolha, G, config):
-    """Executa a métrica correspondente à opção escolhida no menu."""
-    exato = config["exato"]
+def execute_option(choice, G, config):
+    """Runs the metric that corresponds to the chosen menu option."""
+    exact = config["exact"]
     sample_nodes = config["sample_nodes"]
     top_k_n = config["top_k"]
 
-    print()  # linha em branco antes do resultado
-    if escolha == "1":
+    print()  # blank line before the result
+    if choice == "1":
         print_graph_basic_data(G)
-    elif escolha == "2":
+    elif choice == "2":
         print_average_degree(G)
-    elif escolha == "3":
-        print_degree_distribution(G, plot=config["plot"], caminho_grafico=config["plot_out"])
-    elif escolha == "4":
+    elif choice == "3":
+        print_degree_distribution(G, plot=config["plot"], plot_output_path=config["plot_out"])
+    elif choice == "4":
         print_density(G)
-    elif escolha == "5":
-        print_clustering_coefficient(G)
-    elif escolha == "6":
-        print_average_path_length(G)
-    elif escolha == "7":
-        print_diameter(G)
-    elif escolha == "8":
+    elif choice == "5":
+        print_clustering_coefficient(G, exact=exact, sample_nodes=sample_nodes)
+    elif choice == "6":
+        print_average_path_length(G, exact=exact, sample_nodes=sample_nodes)
+    elif choice == "7":
+        print_diameter(G, exact=exact, sample_nodes=sample_nodes)
+    elif choice == "8":
         print_components(G)
-    elif escolha == "9":
+    elif choice == "9":
         print_degree_centrality(G, top_k_n)
-    elif escolha == "10":
+    elif choice == "10":
         print_closeness_centrality(G, top_k_n)
-    elif escolha == "11":
-        print_betweenness_centrality(G, exato, sample_nodes, top_k_n)
-    elif escolha == "12":
-        imprimir_eigenvector_centrality(G, top_k_n)
-    elif escolha == "13":
+    elif choice == "11":
+        print_betweenness_centrality(G, exact, sample_nodes, top_k_n)
+    elif choice == "12":
+        print_eigenvector_centrality(G, top_k_n)
+    elif choice == "13":
         print_pagerank(G, top_k_n)
-    elif escolha == "14":
+    elif choice == "14":
         generate_complete_log(
-            G, exato=exato, sample_nodes=sample_nodes, top_k_n=top_k_n,
-            plot=config["plot"], caminho_grafico=config["plot_out"],
+            G, exact=exact, sample_nodes=sample_nodes, top_k_n=top_k_n,
+            plot=config["plot"], plot_output_path=config["plot_out"],
         )
     else:
-        print("Opção inválida. Tente novamente.")
+        print("Invalid option. Please try again.")
 
 
 def execute_interactive_menu(G, config):
     """
-    Loop principal do menu: exibe as opções, executa a métrica escolhida e
-    volta a mostrar o menu, até o usuário optar por sair (opção 0).
+    Main menu loop: shows the options, runs the chosen metric and shows the
+    menu again, until the user chooses to exit (option 0).
     """
     while True:
         show_menu(G, config)
-        escolha = input("Escolha uma opção: ").strip()
+        choice = input("Choose an option: ").strip()
 
-        if escolha == "0":
-            print("Encerrando. Até mais!")
+        if choice == "0":
+            print("Exiting. See you next time!")
             break
-        elif escolha == "15":
+        elif choice == "15":
             menu_settings(config)
-        elif escolha in dict(MENU_OPTIONS):
-            execute_option(escolha, G, config)
-            input("\nPressione Enter para voltar ao menu principal...")
+        elif choice in dict(MENU_OPTIONS):
+            execute_option(choice, G, config)
+            input("\nPress Enter to return to the main menu...")
         else:
-            print("Opção inválida. Tente novamente.")
+            print("Invalid option. Please try again.")
 
 
 # --------------------------------------------------------------------------
@@ -601,55 +675,57 @@ def execute_interactive_menu(G, config):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Análise de grafo de links da Wikipedia (2006) a partir de um CSV."
+        description="Wikipedia link graph analysis from a CSV file."
     )
-    parser.add_argument("csv", help="Caminho para o arquivo CSV de arestas.")
+    parser.add_argument("csv", help="Path to the edge CSV file.")
     parser.add_argument("--nrows", type=int, default=None,
-                         help="Limitar número de linhas lidas do CSV (para testes rápidos).")
-    parser.add_argument("--exact", dest="exato", action="store_true",
-                         help="Forçar cálculo exato das métricas caras (pode ser muito lento). "
-                              "No modo menu, pode ser alterado depois na opção 'Configurações'.")
+                         help="Limit the number of CSV rows read (for quick tests).")
+    parser.add_argument("--exact", dest="exact", action="store_true",
+                         help="Force exact computation of expensive metrics (clustering "
+                              "coefficient, average path length, diameter, betweenness "
+                              "centrality). Can be very slow on large graphs. In menu "
+                              "mode, this can also be changed later via 'Settings'.")
     parser.add_argument("--sample-nodes", type=int, default=500,
-                         help="Tamanho da amostra para métricas aproximadas (default: 500).")
+                         help="Sample size used for approximate metrics (default: 500).")
     parser.add_argument("--top-k", type=int, default=10,
-                         help="Quantos nós mostrar em cada ranking de centralidade (default: 10).")
+                         help="How many nodes to show in each centrality ranking (default: 10).")
     parser.add_argument("--plot", action="store_true",
-                         help="Gerar gráfico da distribuição de graus (degree_distribution.png).")
+                         help="Generate the degree-distribution plot (degree_distribution.png).")
     parser.add_argument("--plot-out", default="degree_distribution.png",
-                         help="Caminho de saída do gráfico de distribuição de graus.")
+                         help="Output path for the degree-distribution plot.")
     parser.add_argument("--sep", default=None,
-                         help="Forçar separador de campos manualmente (ex: '\\t' para TAB). "
-                              "Por padrão, é detectado automaticamente.")
-    parser.add_argument("--all", dest="modo_all", action="store_true",
-                         help="Executar TODAS as métricas de uma vez, sem menu interativo "
-                              "(comportamento não-interativo, útil para scripts/automação).")
+                         help="Force the field separator manually (e.g. '\\t' for TAB). "
+                              "Auto-detected by default.")
+    parser.add_argument("--all", dest="run_all", action="store_true",
+                         help="Run ALL metrics at once, without the interactive menu "
+                              "(non-interactive behaviour, useful for scripts/automation).")
 
     args = parser.parse_args()
 
-    # permite passar --sep '\t' de forma literal na linha de comando
+    # allows passing --sep '\t' literally on the command line
     sep = args.sep.encode().decode("unicode_escape") if args.sep else None
 
-    if args.modo_all:
-        # modo não-interativo: roda tudo de uma vez e encerra
+    if args.run_all:
+        # non-interactive mode: runs everything at once and exits
         analyze_graph(
-            caminho_csv=args.csv,
+            csv_path=args.csv,
             nrows=args.nrows,
-            exato=args.exato,
+            exact=args.exact,
             sample_nodes=args.sample_nodes,
             top_k_n=args.top_k,
             plot=args.plot,
-            caminho_grafico=args.plot_out,
+            plot_output_path=args.plot_out,
             sep=sep,
         )
         return
 
-    # modo interativo (padrão): carrega o grafo uma vez e abre o menu,
-    # permitindo escolher métricas individualmente sem recarregar o CSV
-    df = graph.carregar_dados(args.csv, nrows=args.nrows, sep=sep)
-    G = graph.construir_grafo(df)
+    # interactive mode (default): loads the graph once and opens the menu,
+    # allowing individual metrics to be chosen without re-reading the CSV
+    df = graph.load_data(args.csv, nrows=args.nrows, sep=sep)
+    G = graph.build_graph(df)
 
     config = {
-        "exato": args.exato,
+        "exact": args.exact,
         "sample_nodes": args.sample_nodes,
         "top_k": args.top_k,
         "plot": args.plot,

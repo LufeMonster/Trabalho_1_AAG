@@ -1,21 +1,22 @@
 import time
 
+
 class Utilities:
     def __init__(self):
-            pass
-    
+        pass
+
     @staticmethod
     def log(msg):
-            """Imprime mensagens de progresso com timestamp relativo simples."""
-            print(f"[{time.strftime('%H:%M:%S')}] {msg}")
+        """Prints progress messages with a simple relative timestamp."""
+        print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
     @staticmethod
     def timeit(func):
-        """Decorator simples para medir e reportar o tempo de cada etapa."""
+        """Simple decorator that measures and reports the runtime of each step."""
         def wrapper(*args, **kwargs):
             t0 = time.time()
             result = func(*args, **kwargs)
             dt = time.time() - t0
-            Utilities.log(f"  -> '{func.__name__}' concluída em {dt:.2f}s")
+            Utilities.log(f"  -> '{func.__name__}' finished in {dt:.2f}s")
             return result
         return wrapper
