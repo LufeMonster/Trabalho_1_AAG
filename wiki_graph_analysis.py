@@ -73,7 +73,8 @@ graph: Graph = Graph()
 @Utilities.timeit
 def count_nodes_and_edges(G):
     """Retorna (número de nós, número de arestas)."""
-    return G.number_of_nodes(), G.number_of_edges()
+    #ig return G.number_of_nodes(), G.number_of_edges()
+    return G.vcount(), G.ecount()
 
 @Utilities.timeit
 def get_average_degree(G):
@@ -84,7 +85,8 @@ def get_average_degree(G):
     para um out-degree e +1 para um in-degree), além do grau total médio
     (in + out) por nó.
     """
-    n = G.number_of_nodes()
+    #ig n = G.number_of_nodes()
+    n = G.vcount()
     if n == 0:
         return {"in_medio": 0, "out_medio": 0, "total_medio": 0}
 
@@ -190,7 +192,8 @@ def get_average_path_length(G):
     media = nx.average_shortest_path_length(componente)
     return {
         "media": media,
-        "n_nos_maior_componente": componente.number_of_nodes(),
+        #ig "n_nos_maior_componente": componente.number_of_nodes(),
+        "n_nos_maior_componente": componente.vcount(),
         "exato": True,
     }
 
@@ -203,7 +206,8 @@ def get_diameter(G):
     """
     Gu = G.to_undirected()
     componente = _biggest_component_as_subgraph(Gu)
-    n = componente.number_of_nodes()
+    #ig n = componente.number_of_nodes()
+    n = componente.vcount()
 
     d = nx.diameter(componente)
     return {"diametro": d, "n_nos_maior_componente": n, "exato": True}
@@ -215,7 +219,7 @@ def get_diameter(G):
 def top_k(dicionario, G, k=10):
     """Retorna os k nós com maior valor em `dicionario`, já com rótulo (título)."""
     ordenado = sorted(dicionario.items(), key=lambda x: x[1], reverse=True)[:k]
-    return [(graph.rotulo(G, nid), nid, valor) for nid, valor in ordenado]
+    return [(graph.label(G, nid), nid, valor) for nid, valor in ordenado]
 
 
 def imprimir_top_k(nome_metrica, lista_top, k=10):
@@ -356,6 +360,16 @@ def print_betweenness_centrality(G, exato, sample_nodes, top_k_n):
     )
     return bet
 
+def print_ig_betweenness_centrality(g, exact, betweenness_cutoff, top_k_n):
+    cutoff = None if exact else betweenness_cutoff
+    Utilities.log("Computing betweenness centrality (can take quite a while)...")
+    bet = centrality_metrics.ig_compute_betweenness_centrality(g, cutoff=cutoff)
+    imprimir_top_k(
+        f"betweenness centrality {'(approximate, cutoff=' + str(cutoff) + ' hops)' if cutoff else '(exact)'}",
+        top_k(bet, g, top_k_n), top_k_n,
+    )
+    return bet
+
 
 def imprimir_eigenvector_centrality(G, top_k_n):
     Utilities.log("Calculando eigenvector centrality...")
@@ -464,13 +478,16 @@ MENU_OPTIONS = [
     ("13", "PageRank"),
     ("14", "Executar TODAS as métricas (relatório completo)"),
     ("15", "Alterar configurações (modo exato/aproximado, amostra, top-k, gráfico)"),
+    ("100", "IG Betweenness centrality"),
     ("0", "Sair"),
 ]
 
 
 def show_menu(G, config):
-    n_nos = G.number_of_nodes()
-    n_arestas = G.number_of_edges()
+    #ig n_nos = G.number_of_nodes()
+    n_nos = G.vcount()
+    #ig n_arestas = G.number_of_edges()
+    n_arestas = G.vcount()
     modo = "EXATO" if config["exato"] else f"aproximado (amostra={config['sample_nodes']})"
 
     print("\n" + "=" * 70)
@@ -570,6 +587,8 @@ def execute_option(escolha, G, config):
             G, exato=exato, sample_nodes=sample_nodes, top_k_n=top_k_n,
             plot=config["plot"], caminho_grafico=config["plot_out"],
         )
+    elif escolha == "100":
+        print_ig_betweenness_centrality(G, exato, sample_nodes, top_k_n)
     else:
         print("Opção inválida. Tente novamente.")
 

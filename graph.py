@@ -1,4 +1,5 @@
 import networkx as nx
+import igraph as ig
 import pandas as pd
 from utilities import Utilities
 
@@ -106,8 +107,33 @@ class Graph:
         que pode ter duplicatas/ambiguidades) e guarda o título como atributo
         'title' do nó, se disponível.
         """
-        G = nx.DiGraph()
+        nodes_from = df[["page_id_from", "page_title_from"]].rename(
+            columns={"page_id_from": "id", "page_title_from": "title"}
+        )
+        nodes_to = df[["page_id_to", "page_title_to"]].rename(
+            columns={"page_id_to": "id", "page_title_to": "title"}
+        )
+        nodes = pd.concat([nodes_from, nodes_to]).drop_duplicates(subset="id").reset_index(drop=True)
 
+        id_to_index = {node_id: idx for idx, node_id in enumerate(nodes["id"])}
+
+        ig_g = ig.Graph(directed=True)
+        ig_g.add_vertices(len(nodes))
+        ig_g.vs["page_id"] = nodes["id"].tolist()
+        ig_g.vs["title"] = (nodes["title"].tolist() if usar_titulos_como_rotulo
+                          else nodes["id"].tolist())
+
+        edges = [
+            (id_to_index[src], id_to_index[dst])
+            for src, dst in zip(df["page_id_from"], df["page_id_to"])
+        ]
+        ig_g.add_edges(edges)
+
+        Utilities.log(f"  Graph built: {ig_g.vcount():,} nodes, {ig_g.ecount():,} edges.")
+        return ig_g
+
+        """
+        G = nx.DiGraph()
         # adiciona nós com atributo de título
         nos_from = df[["page_id_from", "page_title_from"]].rename(
             columns={"page_id_from": "id", "page_title_from": "title"}
@@ -126,8 +152,14 @@ class Graph:
 
         Utilities.log(f"  Grafo construído: {G.number_of_nodes():,} nós, {G.number_of_edges():,} arestas.")
         return G
+        """
 
 
     def rotulo(self, G, node_id):
         """Retorna um rótulo legível (título) para um id de nó, se existir."""
         return G.nodes[node_id].get("title", str(node_id))
+
+    def label(self, g, vertex_index):
+        """Returns a human-readable label (title) for a vertex index, if available."""
+        title = g.vs[vertex_index]["title"]
+        return title if title else str(g.vs[vertex_index]["page_id"])

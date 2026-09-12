@@ -1,4 +1,5 @@
 import networkx as nx
+import igraph as ig
 from utilities import Utilities
 
 @Utilities.timeit
@@ -38,6 +39,17 @@ def compute_betweenness_centrality(G, amostra_k=None, seed=42):
     if amostra_k:
         return nx.betweenness_centrality(G, k=amostra_k, seed=seed, normalized=True)
     return nx.betweenness_centrality(G, normalized=True)
+
+@Utilities.timeit
+def ig_compute_betweenness_centrality(g, cutoff=None):
+    n = g.vcount()
+    raw = g.betweenness(directed=True, cutoff=cutoff)
+
+    # igraph returns unnormalized betweenness; normalize the same way
+    # networkx does with normalized=True (divide by the number of ordered
+    # pairs of other nodes)
+    norm = (n - 1) * (n - 2) if n > 2 else 1
+    return {i: v / norm for i, v in enumerate(raw)}
 
 @Utilities.timeit
 def compute_eigenvector_centrality(G, max_iter=1000, tol=1e-06):
