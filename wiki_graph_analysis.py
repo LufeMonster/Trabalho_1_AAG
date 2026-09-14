@@ -40,7 +40,7 @@ script:
 
 Usage:
     python wiki_graph_analysis.py path/to/file.csv
-    python wiki_graph_analysis.py path/to/file.csv --sample-nodes 500
+    python wiki_graph_analysis.py path/to/file.csv --sample-nodes 12000
     python wiki_graph_analysis.py path/to/file.csv --exact
     python wiki_graph_analysis.py path/to/file.csv --top-k 15 --plot
 """
@@ -119,7 +119,7 @@ def get_density(G):
 
 
 @Utilities.timeit
-def get_clustering_coefficient(G, exact=True, sample_nodes=500, seed=42, undirected=None):
+def get_clustering_coefficient(G, exact=True, sample_nodes=12000, seed=42, undirected=None):
     """
     Average clustering coefficient (average local transitivity).
     NetworkX computes clustering on undirected graphs (or handles directed
@@ -185,7 +185,7 @@ def _largest_component_as_subgraph(G):
 
 
 @Utilities.timeit
-def get_average_path_length(G, exact=True, sample_nodes=500, seed=42,
+def get_average_path_length(G, exact=True, sample_nodes=12000, seed=42,
                              undirected=None, component=None):
     """
     Average shortest path length.
@@ -231,7 +231,7 @@ def get_average_path_length(G, exact=True, sample_nodes=500, seed=42,
 
 
 @Utilities.timeit
-def get_diameter(G, exact=True, sample_nodes=500, seed=42, undirected=None, component=None):
+def get_diameter(G, exact=True, sample_nodes=12000, seed=42, undirected=None, component=None):
     """
     Graph diameter (largest shortest-path distance between two nodes),
     computed on the largest connected component (undirected version).
@@ -350,7 +350,7 @@ def print_density(G):
     return density
 
 
-def print_clustering_coefficient(G, exact=True, sample_nodes=500, undirected=None):
+def print_clustering_coefficient(G, exact=True, sample_nodes=12000, undirected=None):
     clustering = get_clustering_coefficient(G, exact=exact, sample_nodes=sample_nodes, undirected=undirected)
     if clustering.get("exact"):
         print(f"Clustering coefficient (average, exact): {clustering['average']:.6f}")
@@ -371,7 +371,7 @@ def print_components(G):
     return comp
 
 
-def print_average_path_length(G, exact=True, sample_nodes=500, undirected=None, component=None):
+def print_average_path_length(G, exact=True, sample_nodes=12000, undirected=None, component=None):
     apl = get_average_path_length(G, exact=exact, sample_nodes=sample_nodes,
                                    undirected=undirected, component=component)
     if apl.get("exact"):
@@ -384,7 +384,7 @@ def print_average_path_length(G, exact=True, sample_nodes=500, undirected=None, 
     return apl
 
 
-def print_diameter(G, exact=True, sample_nodes=500, undirected=None, component=None):
+def print_diameter(G, exact=True, sample_nodes=12000, undirected=None, component=None):
     diam = get_diameter(G, exact=exact, sample_nodes=sample_nodes,
                          undirected=undirected, component=component)
     if diam.get("exact"):
@@ -440,7 +440,7 @@ def print_pagerank(G, top_k_n):
 # 5. Orchestration — full report (all metrics at once)
 # --------------------------------------------------------------------------
 
-def generate_complete_log(G, exact=False, sample_nodes=500, top_k_n=10,
+def generate_complete_log(G, exact=False, sample_nodes=12000, top_k_n=10,
                            plot=False, plot_output_path="degree_distribution.png"):
     """
     Computes and prints ALL metrics, in the requested order, for an
@@ -500,7 +500,7 @@ def generate_complete_log(G, exact=False, sample_nodes=500, top_k_n=10,
     }
 
 
-def analyze_graph(csv_path, nrows=None, exact=False, sample_nodes=500,
+def analyze_graph(csv_path, nrows=None, exact=False, sample_nodes=12000,
                    top_k_n=10, plot=False, plot_output_path="degree_distribution.png",
                    sep=None):
     """
@@ -685,8 +685,8 @@ def main():
                               "coefficient, average path length, diameter, betweenness "
                               "centrality). Can be very slow on large graphs. In menu "
                               "mode, this can also be changed later via 'Settings'.")
-    parser.add_argument("--sample-nodes", type=int, default=500,
-                         help="Sample size used for approximate metrics (default: 500).")
+    parser.add_argument("--sample-nodes", type=int, default=12000,
+                         help="Sample size used for approximate metrics (default: 12000).")
     parser.add_argument("--top-k", type=int, default=10,
                          help="How many nodes to show in each centrality ranking (default: 10).")
     parser.add_argument("--plot", action="store_true",
